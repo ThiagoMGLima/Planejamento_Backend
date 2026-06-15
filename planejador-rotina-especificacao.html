@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planejador de Rotina — Especificação do MVP</title>
+<style>
+  :root{
+    --ink:#1c1c1a; --slate:#56554e; --muted:#8a8980;
+    --paper:#ffffff; --surface:#f6f5f1; --surface-2:#f0efe9; --hairline:#e4e2db; --hairline-2:#d8d6cd;
+    --blue:#185fa5; --blue-bg:#e9f1fa; --blue-stroke:#9cc4e8;
+    --amber:#8a5212; --amber-bg:#f9eed7; --amber-stroke:#c8993f;
+    --green:#3b6d11; --green-bg:#ecf4df;
+    --red:#a32d2d;
+    --serif:Georgia,"Iowan Old Style","Palatino Linotype",serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --measure:880px;
+    /* paleta de classes */
+    --c-aula-bg:#e6f1fb; --c-aula-st:#9cc4e8; --c-aula-tx:#185fa5;
+    --c-base-bg:#f0efe9; --c-base-st:#d8d6cd; --c-base-tx:#56554e;
+    --c-estudar-bg:#ecf4df; --c-estudar-st:#b9d795; --c-estudar-tx:#3b6d11;
+    --c-prova-bg:#fbeaea; --c-prova-st:#e0b0b0; --c-prova-tx:#a32d2d;
+    --c-trab-bg:#e1f5ee; --c-trab-st:#9fe1cb; --c-trab-tx:#0f6e56;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:#eceae3;color:var(--ink);font-family:var(--sans);line-height:1.7;font-size:16px;-webkit-font-smoothing:antialiased}
+  .page{max-width:var(--measure);margin:0 auto;background:var(--paper);padding:72px 64px 96px;box-shadow:0 1px 40px rgba(0,0,0,.06)}
+
+  .doc-top{border-top:3px solid var(--blue);padding-top:22px;margin-bottom:8px}
+  .eyebrow{font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--blue);font-weight:600;margin:0 0 14px}
+  h1{font-family:var(--serif);font-weight:600;font-size:42px;line-height:1.1;letter-spacing:-.01em;margin:0 0 16px}
+  .meta{font-size:14px;color:var(--muted);margin:0 0 4px}
+  .meta strong{color:var(--slate);font-weight:600}
+
+  nav.toc{margin:40px 0 8px;padding:22px 26px;background:var(--surface);border:1px solid var(--hairline);border-radius:10px}
+  nav.toc h2{font-family:var(--sans);font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0 0 12px;border:0;padding:0}
+  nav.toc ol{margin:0;padding:0;list-style:none;columns:2;column-gap:40px}
+  nav.toc li{margin:0 0 7px;font-size:14.5px;break-inside:avoid}
+  nav.toc a{color:var(--slate);text-decoration:none;display:flex;gap:10px}
+  nav.toc a:hover{color:var(--blue)}
+  nav.toc .n{color:var(--blue);font-variant-numeric:tabular-nums;font-weight:600;min-width:16px}
+
+  h2{font-family:var(--serif);font-weight:600;font-size:27px;letter-spacing:-.01em;margin:64px 0 18px;padding-bottom:12px;border-bottom:1px solid var(--hairline)}
+  h2 .n{color:var(--blue);font-size:18px;font-family:var(--sans);font-weight:600;margin-right:12px;vertical-align:2px}
+  h3{font-size:16.5px;font-weight:600;color:var(--ink);margin:34px 0 10px}
+  h4{font-size:14px;font-weight:600;color:var(--slate);margin:22px 0 8px;letter-spacing:.01em}
+  p{margin:0 0 16px}
+  strong{font-weight:600}
+  code{font-family:var(--mono);font-size:.86em;background:var(--surface-2);color:#3a3a36;padding:.12em .42em;border-radius:5px;border:1px solid var(--hairline)}
+
+  ul.clean{margin:0 0 16px;padding:0;list-style:none}
+  ul.clean>li{position:relative;padding-left:22px;margin:0 0 9px}
+  ul.clean>li::before{content:"";position:absolute;left:4px;top:11px;width:6px;height:6px;border-radius:50%;background:var(--blue-stroke)}
+  dl.defs{margin:0 0 16px}
+  dl.defs dt{font-weight:600;color:var(--ink);margin-top:12px}
+  dl.defs dd{margin:2px 0 0;color:var(--slate)}
+
+  .tbl-wrap{overflow-x:auto;margin:0 0 20px}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--hairline);vertical-align:top}
+  thead th{background:var(--surface);font-weight:600;font-size:12.5px;letter-spacing:.04em;color:var(--slate);border-bottom:1px solid var(--hairline-2)}
+  tbody tr:last-child td{border-bottom:0}
+  td code{white-space:nowrap}
+
+  .note{border-left:3px solid var(--blue);background:var(--blue-bg);padding:14px 18px;border-radius:0 8px 8px 0;margin:0 0 20px}
+  .note p{margin:0}
+  .note .k{font-weight:600;color:var(--blue)}
+
+  pre.flow{font-family:var(--mono);font-size:12.5px;line-height:1.55;background:#fafaf7;border:1px solid var(--hairline);border-radius:9px;padding:16px 18px;overflow-x:auto;margin:0 0 20px;color:#3a3a36}
+
+  figure.wf{margin:18px 0 22px}
+  .wf-frame{border:1px solid var(--hairline);border-radius:12px;background:#fbfbf9;padding:16px;overflow:hidden}
+  .wf-frame svg{display:block;width:100%;height:auto}
+  figure.wf figcaption{font-size:12.5px;color:var(--muted);margin-top:10px;padding-left:2px}
+  figure.wf figcaption b{color:var(--slate);font-weight:600}
+
+  .deco-row{display:flex;flex-wrap:wrap;gap:14px;margin:0 0 18px;font-size:13.5px;color:var(--slate)}
+  .deco-row .it{display:inline-flex;align-items:center;gap:7px}
+  .sw{width:16px;height:12px;border-radius:3px;display:inline-block;border:1px solid var(--hairline-2)}
+  .sw.dash{border-style:dashed;background:transparent}
+
+  footer{margin-top:72px;padding-top:20px;border-top:1px solid var(--hairline);font-size:13px;color:var(--muted)}
+
+  @media (max-width:720px){
+    .page{padding:40px 22px 64px}
+    h1{font-size:32px}
+    h2{font-size:23px}
+    nav.toc ol{columns:1}
+  }
+  @media print{
+    body{background:#fff}
+    .page{box-shadow:none;max-width:none;padding:0 8mm}
+    h2{break-after:avoid}
+    figure.wf,table,pre.flow,.note{break-inside:avoid}
+    nav.toc{break-inside:avoid}
+    a{color:var(--ink)}
+  }
+</style>
+</head>
+<body>
+<main class="page">
+
+  <header class="doc-top">
+    <p class="eyebrow">Especificação · MVP</p>
+    <h1>Planejador de Rotina</h1>
+    <p class="meta"><strong>Versão 1.1</strong> · 15 de junho de 2026</p>
+    <p class="meta">Status: especificação fechada (pré-desenvolvimento)</p>
+  </header>
+
+  <nav class="toc">
+    <h2>Conteúdo</h2>
+    <ol>
+      <li><a href="#s1"><span class="n">1</span><span>Visão do Produto</span></a></li>
+      <li><a href="#s2"><span class="n">2</span><span>Conceitos e Entidades</span></a></li>
+      <li><a href="#s3"><span class="n">3</span><span>Modelo de Dados</span></a></li>
+      <li><a href="#s4"><span class="n">4</span><span>Máquina de Estados</span></a></li>
+      <li><a href="#s5"><span class="n">5</span><span>Telas e Wireframes</span></a></li>
+      <li><a href="#s6"><span class="n">6</span><span>Stack e Arquitetura</span></a></li>
+      <li><a href="#s7"><span class="n">7</span><span>Escopo do MVP</span></a></li>
+      <li><a href="#s8"><span class="n">8</span><span>Motor de Priorização</span></a></li>
+      <li><a href="#s9"><span class="n">9</span><span>Glossário</span></a></li>
+    </ol>
+  </nav>
+
+  <!-- 1 -->
+  <section id="s1">
+    <h2><span class="n">1</span>Visão do Produto</h2>
+
+    <h3>1.1 Problema</h3>
+    <p>Pessoas com rotina densa — aulas, trabalho, estudos e afazeres pessoais — acumulam pendências em listas que raramente viram ação concreta. O que falta é o passo entre <em>“tenho isto a fazer”</em> e <em>“decidi quando farei isto”</em>. Calendários tradicionais registram compromissos fixos, mas não auxiliam o ritual de transformar uma lista de pendências em blocos de tempo reais.</p>
+
+    <h3>1.2 Solução</h3>
+    <p>Um planejador que une três elementos: um <strong>calendário</strong> que comporta toda a rotina, do acordar ao dormir, com eventos fixos (aulas, refeições) e blocos de trabalho; um <strong>Inbox de tarefas</strong>, onde pendências se acumulam sem data; e um <strong>ritual semanal</strong> de agendamento, em que o usuário retira itens do Inbox e decide quando executá-los, arrastando-os para horários do calendário.</p>
+    <p>O diferencial é a <strong>ritualização do agendamento</strong>: o usuário não agenda no impulso, e sim acumula durante a semana e planeja deliberadamente em um momento dedicado.</p>
+
+    <h3>1.3 Fluxo central</h3>
+    <pre class="flow">[Inbox] → [Ritual semanal: arrastar para um horário] → [Bloco no calendário] → [Concluir ou Remarcar]</pre>
+
+    <h3>1.4 Princípios de design</h3>
+    <p>O produto se apoia em quatro princípios que orientam todas as decisões abaixo. O primeiro é a <strong>assistência consultiva, nunca bloqueante</strong>: o motor de sugestões da Fase 2 recomenda, mas o usuário decide, e nenhuma automação impede a ação manual. O segundo é que <strong>cada nível de zoom tem sua profundidade</strong> — Dia para execução, Semana para planejamento e Mês para panorama —, de modo que nenhuma view tenta exibir tudo. O terceiro é a <strong>superfície única de detalhe</strong>: todo evento e toda lista de ação abrem no mesmo painel lateral, mantendo o calendário visível. O quarto é a orientação <strong>web-first, mobile-ready</strong>, em que as escolhas de arquitetura preservam a futura migração para mobile.</p>
+  </section>
+
+  <!-- 2 -->
+  <section id="s2">
+    <h2><span class="n">2</span>Conceitos e Entidades</h2>
+
+    <h3>2.1 Tipos de objeto</h3>
+    <p>O sistema opera sobre dois objetos. Uma <strong>Tarefa (Inbox)</strong> é uma pendência sem horário, aguardando agendamento. Um <strong>Evento</strong> é um item posicionado no calendário, com início e fim. Quando uma Tarefa é promovida ao calendário, ela gera um Evento que herda a sua classe (ou recebe uma no agendamento), mantendo vínculo com a tarefa de origem.</p>
+
+    <h3>2.2 Classes (tipo de atividade)</h3>
+    <p>Todo evento pertence a uma <strong>classe</strong>, que representa o <strong>tipo de atividade</strong> e determina tanto a sua <strong>cor</strong> no calendário quanto o seu <strong>comportamento de conclusão</strong>. A classe é definível pelo usuário; o app traz padrões úteis:</p>
+    <ul class="clean">
+      <li><strong>Aula</strong> (azul) — compromisso fixo recorrente; não rastreia conclusão.</li>
+      <li><strong>Tarefas básicas</strong> (cinza) — estrutura o dia (acordar, refeições, deslocamento); não rastreia.</li>
+      <li><strong>Estudar</strong> (verde) — blocos de estudo/trabalho; rastreia conclusão.</li>
+      <li><strong>Prova</strong> (vermelho) — avaliações com horário fixo; não rastreia por padrão.</li>
+    </ul>
+    <p>O usuário pode criar, renomear e recolorir classes (por exemplo, <em>Trabalho</em> ou <em>Exercício</em>). A cor de um evento vem sempre da sua classe — ela é o eixo que organiza a paleta do calendário.</p>
+
+    <h3>2.3 Rastreamento de conclusão</h3>
+    <p>Propriedade booleana <code>rastrear_conclusao</code>, com <strong>padrão herdado da classe</strong> (ex.: Estudar = sim; Aula, Tarefas básicas e Prova = não) e <strong>override manual</strong> por evento. Apenas eventos que rastreiam conclusão possuem ciclo de status e podem ficar pendentes. Isso separa o que precisa de verificação (<em>“estudei?”</em>) do que apenas ocupa o horário (<em>“acordei”</em>). O override resolve casos de fronteira a custo baixo — um treino pode pertencer a uma classe que não rastreia, mas o usuário pode ligar o acompanhamento naquele evento específico.</p>
+
+    <h3>2.4 Recorrência</h3>
+    <p>Eventos fixos podem repetir. A configuração expõe a seleção de dias (da semana ou do mês) e a opção <em>ignorar feriados</em>. Internamente, a recorrência é uma regra que se expande em ocorrências, e cada ocorrência tem estado próprio: concluir, remarcar ou pular uma ocorrência isolada não afeta a série.</p>
+  </section>
+
+  <!-- 3 -->
+  <section id="s3">
+    <h2><span class="n">3</span>Modelo de Dados</h2>
+
+    <h3>3.1 Classe</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Campo</th><th>Tipo</th><th>Obrig.</th><th>Descrição</th></tr></thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td>sim</td><td>Identificador</td></tr>
+        <tr><td><code>nome</code></td><td>string</td><td>sim</td><td>Nome do tipo de atividade (ex.: Estudar)</td></tr>
+        <tr><td><code>cor</code></td><td>string (hex)</td><td>sim</td><td>Cor de exibição no calendário</td></tr>
+        <tr><td><code>rastreia_conclusao</code></td><td>boolean</td><td>sim</td><td>Padrão de rastreamento para eventos desta classe</td></tr>
+        <tr><td><code>criado_em</code> / <code>atualizado_em</code></td><td>datetime</td><td>sim</td><td>Auditoria</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>3.2 Tarefa</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Campo</th><th>Tipo</th><th>Obrig.</th><th>Descrição</th></tr></thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td>sim</td><td>Identificador</td></tr>
+        <tr><td><code>titulo</code></td><td>string</td><td>sim</td><td>Título</td></tr>
+        <tr><td><code>descricao</code></td><td>text</td><td>não</td><td>Detalhes</td></tr>
+        <tr><td><code>classe</code></td><td>FK → Classe</td><td>não</td><td>Classe herdada ao agendar</td></tr>
+        <tr><td><code>deadline</code></td><td>datetime</td><td>não</td><td>Prazo — usado na Fase 2</td></tr>
+        <tr><td><code>esforco_estimado</code></td><td>int (min)</td><td>não</td><td>Duração/complexidade estimada — Fase 2</td></tr>
+        <tr><td><code>prioridade</code></td><td>derivada</td><td>não</td><td>Calculada pelo motor — Fase 2</td></tr>
+        <tr><td><code>status</code></td><td>enum</td><td>sim</td><td><code>INBOX</code>, <code>PROMOVIDA</code></td></tr>
+        <tr><td><code>criado_em</code> / <code>atualizado_em</code></td><td>datetime</td><td>sim</td><td>Auditoria</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>3.3 Evento</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Campo</th><th>Tipo</th><th>Obrig.</th><th>Descrição</th></tr></thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td>sim</td><td>Identificador</td></tr>
+        <tr><td><code>titulo</code></td><td>string</td><td>sim</td><td>Título</td></tr>
+        <tr><td><code>descricao</code></td><td>text</td><td>não</td><td>Detalhes</td></tr>
+        <tr><td><code>inicio</code></td><td>datetime (tz-aware)</td><td>sim</td><td>Início</td></tr>
+        <tr><td><code>fim</code></td><td>datetime (tz-aware)</td><td>sim</td><td>Término</td></tr>
+        <tr><td><code>classe</code></td><td>FK → Classe</td><td>sim</td><td>Tipo de atividade; define cor e padrão de conclusão</td></tr>
+        <tr><td><code>rastrear_conclusao</code></td><td>boolean</td><td>sim</td><td>Padrão herdado da classe; aceita override</td></tr>
+        <tr><td><code>status</code></td><td>enum</td><td>condic.</td><td><code>AGENDADO</code>, <code>PENDENTE</code>, <code>CONCLUIDO</code>, <code>REMARCADO</code> — só quando <code>rastrear_conclusao = true</code></td></tr>
+        <tr><td><code>origem_tarefa</code></td><td>FK → Tarefa</td><td>não</td><td>Tarefa que originou o bloco</td></tr>
+        <tr><td><code>regra_recorrencia</code></td><td>FK → Regra</td><td>não</td><td>Regra de repetição</td></tr>
+        <tr><td><code>criado_em</code> / <code>atualizado_em</code></td><td>datetime</td><td>sim</td><td>Auditoria</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>3.4 Regra de Recorrência</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Campo</th><th>Tipo</th><th>Descrição</th></tr></thead>
+      <tbody>
+        <tr><td><code>tipo</code></td><td>enum</td><td><code>SEMANAL</code> (dias da semana) ou <code>MENSAL</code> (dias do mês)</td></tr>
+        <tr><td><code>dias</code></td><td>lista[int]</td><td>Dias selecionados</td></tr>
+        <tr><td><code>ignorar_feriados</code></td><td>boolean</td><td>Suprime ocorrências em feriados</td></tr>
+        <tr><td><code>data_fim</code></td><td>date</td><td>Fim da repetição (opcional)</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>3.5 Ocorrência (de evento recorrente)</h3>
+    <p>Cada materialização de um evento recorrente carrega uma data específica e um override opcional de status e de horário. Isso permite que uma única ocorrência seja concluída, remarcada ou pulada sem alterar a série.</p>
+
+    <h3>3.6 Relacionamentos</h3>
+    <pre class="flow">Classe            1 — N      Evento
+Classe            1 — N      Tarefa
+Tarefa            1 — 0..1   Evento (origem)
+Evento            1 — 0..1   RegraRecorrencia
+Evento recorrente 1 — N      Ocorrência</pre>
+  </section>
+
+  <!-- 4 -->
+  <section id="s4">
+    <h2><span class="n">4</span>Máquina de Estados</h2>
+    <p>Aplicável <strong>somente</strong> a eventos com <code>rastrear_conclusao = true</code>. Eventos de classes que não rastreiam (ex.: Aula, Tarefas básicas, Prova) não possuem status — apenas ocupam o horário.</p>
+
+    <h4>Estados</h4>
+    <ul class="clean">
+      <li><code>AGENDADO</code> — posicionado, ainda não resolvido.</li>
+      <li><code>PENDENTE</code> — passou do horário de fim sem ação; aguarda decisão.</li>
+      <li><code>CONCLUIDO</code> — marcado como feito.</li>
+      <li><code>REMARCADO</code> — usuário optou por refazer; a ocorrência encerra e o item retorna ao Inbox.</li>
+    </ul>
+
+    <h4>Transições</h4>
+    <pre class="flow">AGENDADO ──(agora &gt; fim, sem ação)──▶ PENDENTE
+AGENDADO ──(usuário conclui)─────────▶ CONCLUIDO
+PENDENTE ──(usuário confirma feito)──▶ CONCLUIDO
+PENDENTE ──(usuário opta refazer)────▶ REMARCADO ──▶ volta ao Inbox</pre>
+
+    <div class="note"><p><span class="k">Regra-chave.</span> Remarcar devolve o item ao Inbox, reinserindo-o no ritual de agendamento em vez de remarcá-lo imediatamente. Isso mantém um único fluxo central: tudo passa por Inbox → calendário.</p></div>
+  </section>
+
+  <!-- 5 -->
+  <section id="s5">
+    <h2><span class="n">5</span>Telas e Wireframes</h2>
+    <p>A navegação se dá por três views — <strong>Dia / Semana / Mês</strong> — alternadas por um toggle na barra superior. O Inbox permanece no sidebar esquerdo em todas as views; o mini-calendário acompanha o Inbox nas views de Dia e Semana. Nos wireframes, <strong>a cor de cada evento vem da sua classe</strong>; o estado (pendente, concluído) é mostrado por tratamento, não por matiz.</p>
+    <div class="deco-row" style="margin-bottom:8px">
+      <span class="it"><span class="sw" style="background:#e6f1fb;border-color:#9cc4e8"></span> Aula</span>
+      <span class="it"><span class="sw" style="background:#f0efe9;border-color:#d8d6cd"></span> Tarefas básicas</span>
+      <span class="it"><span class="sw" style="background:#ecf4df;border-color:#b9d795"></span> Estudar</span>
+      <span class="it"><span class="sw" style="background:#fbeaea;border-color:#e0b0b0"></span> Prova</span>
+      <span class="it"><span class="sw" style="background:#e1f5ee;border-color:#9fe1cb"></span> Trabalho</span>
+      <span class="it" style="color:#8a8980">+ classes do usuário</span>
+    </div>
+    <div class="deco-row">
+      <span class="it"><span class="sw dash" style="border-color:#ba7517"></span> pendente (borda tracejada âmbar + ⚠)</span>
+      <span class="it"><span class="sw" style="background:#ecf4df;border-color:#b9d795;opacity:.5"></span> concluído (esmaecido + ✓)</span>
+    </div>
+
+    <h3>5.1 Tela 1 — Layout Principal (Semana)</h3>
+    <p><strong>Decisão.</strong> Mini-calendário + Inbox no sidebar esquerdo; calendário semanal com grade horária à direita; arrasto Inbox → horário no sentido esquerda → direita (natural).</p>
+    <figure class="wf"><div class="wf-frame">
+      <svg viewBox="0 0 800 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Wireframe da tela principal na visão semanal">
+        <rect x="1" y="1" width="798" height="468" rx="12" fill="#ffffff" stroke="#e4e2db"/>
+        <path d="M1 37 H799" stroke="#e4e2db"/>
+        <rect x="1" y="1" width="798" height="36" rx="12" fill="#f6f5f1"/>
+        <rect x="1" y="20" width="798" height="17" fill="#f6f5f1"/>
+        <text x="18" y="24" font-family="system-ui" font-size="13" font-weight="600" fill="#1c1c1a">Planejador</text>
+        <text x="430" y="24" font-family="system-ui" font-size="12" fill="#8a8980">15–21 jun</text>
+        <rect x="592" y="9" width="42" height="19" rx="5" fill="#ffffff" stroke="#e4e2db"/><text x="613" y="22" font-family="system-ui" font-size="11.5" fill="#8a8980" text-anchor="middle">Dia</text>
+        <rect x="636" y="9" width="60" height="19" rx="5" fill="#e9f1fa" stroke="#9cc4e8"/><text x="666" y="22" font-family="system-ui" font-size="11.5" font-weight="600" fill="#185fa5" text-anchor="middle">Semana</text>
+        <rect x="698" y="9" width="42" height="19" rx="5" fill="#ffffff" stroke="#e4e2db"/><text x="719" y="22" font-family="system-ui" font-size="11.5" fill="#8a8980" text-anchor="middle">Mês</text>
+        <rect x="1" y="37" width="168" height="432" fill="#f6f5f1"/>
+        <path d="M169 37 V469" stroke="#e4e2db"/>
+        <text x="86" y="58" font-family="system-ui" font-size="11.5" font-weight="600" fill="#56554e" text-anchor="middle">jun 2026</text>
+        <g font-family="system-ui" font-size="9" fill="#8a8980" text-anchor="middle">
+          <text x="24" y="74">S</text><text x="44" y="74">T</text><text x="64" y="74">Q</text><text x="84" y="74">Q</text><text x="104" y="74">S</text><text x="124" y="74">S</text><text x="144" y="74">D</text>
+        </g>
+        <rect x="15" y="92" width="138" height="15" rx="3" fill="#e9f1fa"/>
+        <g font-family="system-ui" font-size="9.5" fill="#56554e" text-anchor="middle">
+          <text x="24" y="89">1</text><text x="44" y="89">2</text><text x="64" y="89">3</text><text x="84" y="89">4</text><text x="104" y="89">5</text><text x="124" y="89">6</text><text x="144" y="89">7</text>
+          <text x="24" y="103" fill="#185fa5" font-weight="600">15</text><text x="44" y="103" fill="#185fa5">16</text><text x="64" y="103" fill="#185fa5">17</text><text x="84" y="103" fill="#185fa5">18</text><text x="104" y="103" fill="#185fa5">19</text><text x="124" y="103" fill="#185fa5">20</text><text x="144" y="103" fill="#185fa5">21</text>
+          <text x="24" y="120">22</text><text x="44" y="120">23</text><text x="64" y="120">24</text><text x="84" y="120">25</text><text x="104" y="120">26</text><text x="124" y="120">27</text><text x="144" y="120">28</text>
+        </g>
+        <path d="M15 136 H153" stroke="#e4e2db"/>
+        <text x="16" y="156" font-family="system-ui" font-size="12" font-weight="600" fill="#1c1c1a">Inbox</text>
+        <rect x="124" y="146" width="30" height="15" rx="4" fill="none" stroke="#d8d6cd" stroke-dasharray="2 2"/><text x="139" y="157" font-family="system-ui" font-size="10.5" fill="#8a8980" text-anchor="middle">+</text>
+        <rect x="15" y="168" width="139" height="34" rx="7" fill="#ffffff" stroke="#e4e2db"/>
+        <text x="25" y="183" font-family="system-ui" font-size="11" fill="#1c1c1a">Estudar P1 Cálculo</text>
+        <text x="25" y="196" font-family="system-ui" font-size="10" fill="#8a8980">deadline 30/06 · 3h</text>
+        <rect x="15" y="208" width="139" height="34" rx="7" fill="#ffffff" stroke="#e4e2db"/>
+        <text x="25" y="223" font-family="system-ui" font-size="11" fill="#1c1c1a">Relatório Física</text>
+        <text x="25" y="236" font-family="system-ui" font-size="10" fill="#8a8980">sem deadline · 2h</text>
+        <g font-family="system-ui" font-size="10.5" fill="#56554e" text-anchor="middle">
+          <text x="243" y="56">Seg 15</text><text x="328" y="56">Ter</text><text x="414" y="56">Qua</text><text x="500" y="56">Qui</text><text x="585" y="56">Sex</text><text x="671" y="56">Sáb</text><text x="757" y="56">Dom</text>
+        </g>
+        <path d="M169 64 H799" stroke="#e4e2db"/>
+        <g stroke="#eeece6">
+          <path d="M200 64 V469"/><path d="M286 64 V469"/><path d="M371 64 V469"/><path d="M457 64 V469"/><path d="M543 64 V469"/><path d="M629 64 V469"/><path d="M714 64 V469"/>
+        </g>
+        <g stroke="#f1efe9"><path d="M200 108 H799"/><path d="M200 178 H799"/><path d="M200 248 H799"/><path d="M200 318 H799"/><path d="M200 388 H799"/></g>
+        <g font-family="system-ui" font-size="9.5" fill="#a9a89f" text-anchor="end">
+          <text x="194" y="98">08h</text><text x="194" y="168">10h</text><text x="194" y="238">12h</text><text x="194" y="308">14h</text><text x="194" y="378">16h</text>
+        </g>
+        <g font-family="system-ui" font-size="10">
+          <rect x="204" y="94" width="78" height="44" rx="4" fill="#e6f1fb" stroke="#9cc4e8"/><text x="210" y="110" fill="#185fa5">Física</text>
+          <rect x="204" y="234" width="78" height="34" rx="4" fill="#e6f1fb" stroke="#9cc4e8"/><text x="210" y="250" fill="#185fa5">Cálculo</text>
+          <rect x="375" y="94" width="78" height="44" rx="4" fill="#e6f1fb" stroke="#9cc4e8"/><text x="381" y="110" fill="#185fa5">Física</text>
+          <rect x="547" y="94" width="78" height="44" rx="4" fill="#e6f1fb" stroke="#9cc4e8"/><text x="553" y="110" fill="#185fa5">Física</text>
+          <rect x="289" y="164" width="78" height="30" rx="4" fill="#ecf4df" stroke="#ba7517" stroke-dasharray="3 2"/><text x="295" y="183" fill="#3b6d11">⚠ Estudar</text>
+        </g>
+        <text x="218" y="456" font-family="system-ui" font-size="10.5" fill="#a9a89f">← arraste do Inbox para um horário</text>
+      </svg>
+    </div>
+    <figcaption><b>Anotações.</b> As aulas (Física, Cálculo) compartilham a cor da classe Aula. O bloco pendente é Estudar (verde) com o tratamento de pendência. Clicar uma semana no mini-calendário navega o calendário.</figcaption>
+    </figure>
+
+    <h3>5.2 Tela 2 — Visão Mensal</h3>
+    <p><strong>Decisão.</strong> O Inbox permanece no sidebar (consistência); o mini-calendário some, por ser redundante no mês. A alta densidade é tratada pela <strong>estratégia híbrida</strong>: a intensidade de um tom neutro indica a carga do dia, e chips aparecem apenas para <em>âncoras</em> (deadlines e feriados). Eventos de rotina não são listados no mês.</p>
+    <figure class="wf"><div class="wf-frame">
+      <svg viewBox="0 0 800 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Wireframe da visão mensal com densidade por tom neutro">
+        <rect x="1" y="1" width="798" height="468" rx="12" fill="#ffffff" stroke="#e4e2db"/>
+        <rect x="1" y="1" width="798" height="36" rx="12" fill="#f6f5f1"/><rect x="1" y="20" width="798" height="17" fill="#f6f5f1"/><path d="M1 37 H799" stroke="#e4e2db"/>
+        <text x="18" y="24" font-family="system-ui" font-size="13" font-weight="600" fill="#1c1c1a">Planejador</text>
+        <text x="430" y="24" font-family="system-ui" font-size="12" fill="#8a8980">junho 2026</text>
+        <rect x="592" y="9" width="42" height="19" rx="5" fill="#ffffff" stroke="#e4e2db"/><text x="613" y="22" font-family="system-ui" font-size="11.5" fill="#8a8980" text-anchor="middle">Dia</text>
+        <rect x="636" y="9" width="60" height="19" rx="5" fill="#ffffff" stroke="#e4e2db"/><text x="666" y="22" font-family="system-ui" font-size="11.5" fill="#8a8980" text-anchor="middle">Semana</text>
+        <rect x="698" y="9" width="42" height="19" rx="5" fill="#e9f1fa" stroke="#9cc4e8"/><text x="719" y="22" font-family="system-ui" font-size="11.5" font-weight="600" fill="#185fa5" text-anchor="middle">Mês</text>
+        <rect x="1" y="37" width="168" height="432" fill="#f6f5f1"/><path d="M169 37 V469" stroke="#e4e2db"/>
+        <text x="16" y="58" font-family="system-ui" font-size="12" font-weight="600" fill="#1c1c1a">Inbox</text>
+        <rect x="124" y="48" width="30" height="15" rx="4" fill="none" stroke="#d8d6cd" stroke-dasharray="2 2"/><text x="139" y="59" font-family="system-ui" font-size="10.5" fill="#8a8980" text-anchor="middle">+</text>
+        <rect x="15" y="70" width="139" height="34" rx="7" fill="#ffffff" stroke="#e4e2db"/><text x="25" y="85" font-family="system-ui" font-size="11" fill="#1c1c1a">Estudar P1 Cálculo</text><text x="25" y="98" font-family="system-ui" font-size="10" fill="#8a8980">deadline 30/06</text>
+        <rect x="15" y="110" width="139" height="26" rx="7" fill="#ffffff" stroke="#e4e2db"/><text x="25" y="127" font-family="system-ui" font-size="11" fill="#1c1c1a">Relatório Física</text>
+        <rect x="15" y="150" width="139" height="40" rx="7" fill="none" stroke="#e4e2db" stroke-dasharray="3 3"/><text x="84" y="167" font-family="system-ui" font-size="10" fill="#a9a89f" text-anchor="middle">mini-calendário</text><text x="84" y="180" font-family="system-ui" font-size="10" fill="#a9a89f" text-anchor="middle">oculto no mês</text>
+        <g font-family="system-ui" font-size="10" fill="#8a8980" text-anchor="middle">
+          <text x="223" y="58">Seg</text><text x="313" y="58">Ter</text><text x="403" y="58">Qua</text><text x="493" y="58">Qui</text><text x="583" y="58">Sex</text><text x="673" y="58">Sáb</text><text x="757" y="58">Dom</text>
+        </g>
+        <g>
+          <rect x="178" y="66" width="88" height="80" fill="#d6dce0"/><rect x="266" y="66" width="88" height="80" fill="#c8d1d6"/><rect x="354" y="66" width="88" height="80" fill="#d6dce0"/><rect x="442" y="66" width="88" height="80" fill="#e3e7ea"/><rect x="530" y="66" width="88" height="80" fill="#eef0f1"/><rect x="618" y="66" width="88" height="80" fill="#f5f5f3"/><rect x="706" y="66" width="90" height="80" fill="#f5f5f3"/>
+          <rect x="178" y="146" width="88" height="80" fill="#c8d1d6"/><rect x="266" y="146" width="88" height="80" fill="#c8d1d6"/><rect x="354" y="146" width="88" height="80" fill="#d6dce0"/><rect x="442" y="146" width="88" height="80" fill="#e3e7ea"/><rect x="530" y="146" width="88" height="80" fill="#eef0f1"/><rect x="618" y="146" width="88" height="80" fill="#f5f5f3"/><rect x="706" y="146" width="90" height="80" fill="#f5f5f3"/>
+          <rect x="178" y="226" width="88" height="80" fill="#c8d1d6"/><rect x="266" y="226" width="88" height="80" fill="#e3e7ea"/><rect x="354" y="226" width="88" height="80" fill="#d6dce0"/><rect x="442" y="226" width="88" height="80" fill="#e3e7ea"/><rect x="530" y="226" width="88" height="80" fill="#fbeaea"/><rect x="618" y="226" width="88" height="80" fill="#f5f5f3"/><rect x="706" y="226" width="90" height="80" fill="#f5f5f3"/>
+          <rect x="178" y="306" width="88" height="80" fill="#d6dce0"/><rect x="266" y="306" width="88" height="80" fill="#c8d1d6"/><rect x="354" y="306" width="88" height="80" fill="#d6dce0"/><rect x="442" y="306" width="88" height="80" fill="#d6dce0"/><rect x="530" y="306" width="88" height="80" fill="#eef0f1"/><rect x="618" y="306" width="88" height="80" fill="#f5f5f3"/><rect x="706" y="306" width="90" height="80" fill="#f5f5f3"/>
+          <rect x="178" y="386" width="88" height="83" fill="#c8d1d6"/><rect x="266" y="386" width="88" height="83" fill="#d6dce0"/><rect x="354" y="386" width="88" height="83" fill="#ffffff"/><rect x="442" y="386" width="88" height="83" fill="#ffffff"/><rect x="530" y="386" width="88" height="83" fill="#ffffff"/><rect x="618" y="386" width="88" height="83" fill="#ffffff"/><rect x="706" y="386" width="90" height="83" fill="#ffffff"/>
+        </g>
+        <g stroke="#e4e2db">
+          <path d="M178 66 H796"/><path d="M178 146 H796"/><path d="M178 226 H796"/><path d="M178 306 H796"/><path d="M178 386 H796"/>
+          <path d="M266 66 V469"/><path d="M354 66 V469"/><path d="M442 66 V469"/><path d="M530 66 V469"/><path d="M618 66 V469"/><path d="M706 66 V469"/>
+        </g>
+        <g font-family="system-ui" font-size="10" fill="#56554e">
+          <text x="184" y="80">1</text><text x="272" y="80">2</text><text x="360" y="80">3</text><text x="448" y="80">4</text><text x="536" y="80">5</text><text x="624" y="80">6</text><text x="712" y="80">7</text>
+          <text x="184" y="160">8</text><text x="272" y="160">9</text><text x="360" y="160">10</text><text x="448" y="160">11</text><text x="536" y="160">12</text><text x="624" y="160">13</text><text x="712" y="160">14</text>
+          <text x="272" y="240">16</text><text x="360" y="240">17</text><text x="448" y="240">18</text><text x="624" y="240">20</text><text x="712" y="240">21</text>
+          <text x="184" y="320">22</text><text x="272" y="320">23</text><text x="360" y="320">24</text><text x="448" y="320">25</text><text x="536" y="320">26</text><text x="624" y="320">27</text><text x="712" y="320">28</text>
+          <text x="184" y="400">29</text><text x="272" y="400">30</text>
+        </g>
+        <circle cx="189" cy="236" r="9" fill="#185fa5"/><text x="189" y="240" font-family="system-ui" font-size="10" font-weight="600" fill="#ffffff" text-anchor="middle">15</text>
+        <text x="536" y="240" font-family="system-ui" font-size="10" fill="#a32d2d">19</text>
+        <rect x="534" y="248" width="60" height="15" rx="3" fill="#fbeaea"/><text x="564" y="259" font-family="system-ui" font-size="9.5" fill="#a32d2d" text-anchor="middle">Feriado</text>
+        <rect x="358" y="166" width="62" height="15" rx="3" fill="#f9eed7"/><text x="389" y="177" font-family="system-ui" font-size="9.5" fill="#8a5212" text-anchor="middle">Relatório</text>
+        <rect x="182" y="406" width="62" height="15" rx="3" fill="#f9eed7"/><text x="213" y="417" font-family="system-ui" font-size="9.5" fill="#8a5212" text-anchor="middle">P1 Cálculo</text>
+      </svg>
+    </div>
+    <figcaption><b>Leitura.</b> Tom mais forte = dia mais cheio (sinal neutro, não uma classe). Chips só para deadlines (âmbar) e o feriado fica como marcador de dia.</figcaption>
+    </figure>
+    <div class="deco-row">
+      <span class="it"><span class="sw" style="background:#f5f5f3"></span> dia leve</span>
+      <span class="it"><span class="sw" style="background:#c8d1d6"></span> dia cheio</span>
+      <span class="it"><span class="sw" style="background:#f9eed7;border-color:#c8993f"></span> deadline</span>
+      <span class="it"><span class="sw" style="background:#fbeaea;border-color:#e0b0b0"></span> feriado (dia)</span>
+    </div>
+
+    <h3>5.3 Tela 3 — Visão de Dia</h3>
+    <p><strong>Decisão.</strong> Coluna única com grade horária do acordar ao dormir; cada evento ocupa a largura total, com altura proporcional à duração. É a superfície de execução para dias densos. O Inbox permanece para arrasto. Aqui as cores das classes ficam mais evidentes.</p>
+    <figure class="wf"><div class="wf-frame">
+      <svg viewBox="0 0 800 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Wireframe da visão de dia do acordar ao dormir">
+        <rect x="1" y="1" width="798" height="468" rx="12" fill="#ffffff" stroke="#e4e2db"/>
+        <rect x="1" y="1" width="798" height="36" rx="12" fill="#f6f5f1"/><rect x="1" y="20" width="798" height="17" fill="#f6f5f1"/><path d="M1 37 H799" stroke="#e4e2db"/>
+        <text x="18" y="24" font-family="system-ui" font-size="13" font-weight="600" fill="#1c1c1a">Planejador</text>
+        <text x="430" y="24" font-family="system-ui" font-size="12" fill="#8a8980">Seg, 15 jun</text>
+        <rect x="592" y="9" width="42" height="19" rx="5" fill="#e9f1fa" stroke="#9cc4e8"/><text x="613" y="22" font-family="system-ui" font-size="11.5" font-weight="600" fill="#185fa5" text-anchor="middle">Dia</text>
+        <rect x="636" y="9" width="60" height="19" rx="5" fill="#ffffff" stroke="#e4e2db"/><text x="666" y="22" font-family="system-ui" font-size="11.5" fill="#8a8980" text-anchor="middle">Semana</text>
+        <rect x="698" y="9" width="42" height="19" rx="5" fill="#ffffff" stroke="#e4e2db"/><text x="719" y="22" font-family="system-ui" font-size="11.5" fill="#8a8980" text-anchor="middle">Mês</text>
+        <rect x="1" y="37" width="168" height="432" fill="#f6f5f1"/><path d="M169 37 V469" stroke="#e4e2db"/>
+        <text x="16" y="58" font-family="system-ui" font-size="12" font-weight="600" fill="#1c1c1a">Inbox</text>
+        <rect x="15" y="70" width="139" height="26" rx="7" fill="#ffffff" stroke="#e4e2db"/><text x="25" y="87" font-family="system-ui" font-size="11" fill="#1c1c1a">Revisar contrato</text>
+        <rect x="15" y="102" width="139" height="26" rx="7" fill="#ffffff" stroke="#e4e2db"/><text x="25" y="119" font-family="system-ui" font-size="11" fill="#1c1c1a">Ler artigo RL</text>
+        <text x="84" y="150" font-family="system-ui" font-size="10" fill="#a9a89f" text-anchor="middle">arraste para um</text><text x="84" y="163" font-family="system-ui" font-size="10" fill="#a9a89f" text-anchor="middle">horário livre →</text>
+        <g font-family="system-ui" font-size="9.5" fill="#a9a89f" text-anchor="end">
+          <text x="220" y="74">06h</text><text x="220" y="118">08h</text><text x="220" y="162">10h</text><text x="220" y="206">12h</text><text x="220" y="250">14h</text><text x="220" y="294">16h</text><text x="220" y="338">18h</text><text x="220" y="382">20h</text><text x="220" y="426">22h</text>
+        </g>
+        <g stroke="#f1efe9"><path d="M228 70 H792"/><path d="M228 114 H792"/><path d="M228 158 H792"/><path d="M228 202 H792"/><path d="M228 246 H792"/><path d="M228 290 H792"/><path d="M228 334 H792"/><path d="M228 378 H792"/><path d="M228 422 H792"/></g>
+        <g font-family="system-ui" font-size="11">
+          <rect x="234" y="80" width="552" height="30" rx="5" fill="#f0efe9" stroke="#d8d6cd"/><text x="244" y="99" fill="#56554e">Acordar · Café · Deslocamento</text>
+          <rect x="234" y="114" width="552" height="42" rx="5" fill="#e6f1fb" stroke="#9cc4e8"/><text x="244" y="139" fill="#185fa5">Física (Aula)</text>
+          <rect x="234" y="160" width="552" height="40" rx="5" fill="#e6f1fb" stroke="#9cc4e8"/><text x="244" y="184" fill="#185fa5">Cálculo (Aula)</text>
+          <rect x="234" y="204" width="552" height="40" rx="5" fill="#f0efe9" stroke="#d8d6cd"/><text x="244" y="228" fill="#56554e">Almoço</text>
+          <rect x="234" y="248" width="552" height="40" rx="5" fill="#ecf4df" stroke="#b9d795"/><text x="244" y="272" fill="#3b6d11">Estudar P1 Cálculo</text>
+          <rect x="234" y="292" width="552" height="40" rx="5" fill="#e1f5ee" stroke="#9fe1cb"/><text x="244" y="316" fill="#0f6e56">Projeto InfoClínicas  ·  Trabalho</text>
+          <rect x="234" y="336" width="552" height="40" rx="5" fill="#f0efe9" stroke="#d8d6cd"/><text x="244" y="360" fill="#56554e">Academia · Jantar</text>
+          <rect x="234" y="380" width="552" height="40" rx="5" fill="#ecf4df" stroke="#b9d795"/><text x="244" y="404" fill="#3b6d11">Estudar Física</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><b>Por quê.</b> O eixo vertical das horas dá espaço de sobra para 12–15 eventos; e as classes (azul, cinza, verde, teal) tornam a leitura do dia imediata.</figcaption>
+    </figure>
+
+    <h3>5.4 Tela 4 — Modal do Evento</h3>
+    <p><strong>Decisão.</strong> <strong>Painel lateral</strong> deslizante da direita; o calendário permanece visível. Contém título, classe, início/fim, detalhes, recorrência (dias + ignorar feriados) e — para eventos rastreáveis — status com ações Concluir/Remarcar. O checkbox <em>Acompanhar conclusão</em> vem pré-marcado conforme o padrão da classe, com override.</p>
+    <figure class="wf"><div class="wf-frame">
+      <svg viewBox="0 0 800 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Wireframe do painel lateral de edição de evento">
+        <rect x="1" y="1" width="798" height="468" rx="12" fill="#ffffff" stroke="#e4e2db"/>
+        <rect x="1" y="1" width="798" height="36" rx="12" fill="#f6f5f1"/><rect x="1" y="20" width="798" height="17" fill="#f6f5f1"/><path d="M1 37 H799" stroke="#e4e2db"/>
+        <text x="18" y="24" font-family="system-ui" font-size="13" font-weight="600" fill="#1c1c1a">Planejador</text>
+        <g font-family="system-ui" font-size="10.5" fill="#56554e" text-anchor="middle">
+          <text x="240" y="56">Seg 15</text><text x="330" y="56">Ter</text><text x="420" y="56">Qua</text>
+        </g>
+        <path d="M169 64 H520" stroke="#e4e2db"/>
+        <g stroke="#eeece6"><path d="M286 64 V469"/><path d="M376 64 V469"/><path d="M466 64 V469"/></g>
+        <g font-family="system-ui" font-size="10">
+          <rect x="200" y="96" width="80" height="40" rx="4" fill="#e6f1fb" stroke="#9cc4e8"/><text x="207" y="112" fill="#185fa5">Física</text>
+          <rect x="200" y="240" width="80" height="34" rx="4" fill="#ecf4df" stroke="#6da12f" stroke-width="1.6"/><text x="207" y="256" fill="#3b6d11">Estudar P1</text>
+        </g>
+        <rect x="520" y="37" width="279" height="432" fill="#ffffff"/><path d="M520 37 V469" stroke="#d8d6cd"/>
+        <text x="538" y="62" font-family="system-ui" font-size="13" font-weight="600" fill="#1c1c1a">Estudar P1 Cálculo</text>
+        <text x="780" y="62" font-family="system-ui" font-size="14" fill="#a9a89f" text-anchor="end">✕</text>
+        <text x="538" y="84" font-family="system-ui" font-size="10.5" fill="#8a8980">Classe</text>
+        <rect x="538" y="90" width="50" height="20" rx="6" fill="#e6f1fb" stroke="#9cc4e8"/><text x="563" y="104" font-family="system-ui" font-size="10.5" fill="#185fa5" text-anchor="middle">Aula</text>
+        <rect x="592" y="90" width="44" height="20" rx="6" fill="#f0efe9" stroke="#d8d6cd"/><text x="614" y="104" font-family="system-ui" font-size="10.5" fill="#56554e" text-anchor="middle">Básica</text>
+        <rect x="640" y="90" width="58" height="20" rx="6" fill="#ecf4df" stroke="#6da12f"/><text x="669" y="104" font-family="system-ui" font-size="10.5" font-weight="600" fill="#3b6d11" text-anchor="middle">Estudar</text>
+        <rect x="702" y="90" width="50" height="20" rx="6" fill="#fbeaea" stroke="#e0b0b0"/><text x="727" y="104" font-family="system-ui" font-size="10.5" fill="#a32d2d" text-anchor="middle">Prova</text>
+        <g font-family="system-ui" font-size="11.5">
+          <text x="538" y="132" fill="#8a8980">Início</text><text x="780" y="132" fill="#1c1c1a" text-anchor="end">15 jun · 13:00</text>
+          <path d="M538 142 H780" stroke="#f1efe9"/>
+          <text x="538" y="160" fill="#8a8980">Fim</text><text x="780" y="160" fill="#1c1c1a" text-anchor="end">15 jun · 15:00</text>
+          <path d="M538 170 H780" stroke="#f1efe9"/>
+          <text x="538" y="188" fill="#8a8980">Detalhes</text><text x="780" y="188" fill="#a9a89f" text-anchor="end">Listas 4–6…</text>
+        </g>
+        <path d="M538 202 H780" stroke="#e4e2db"/>
+        <rect x="538" y="214" width="14" height="14" rx="3" fill="#e9f1fa" stroke="#9cc4e8"/><path d="M541 221 l2.2 2.2 l4-4.2" stroke="#185fa5" stroke-width="1.4" fill="none"/>
+        <text x="560" y="225" font-family="system-ui" font-size="11.5" fill="#1c1c1a">Repetir na rotina</text>
+        <g font-family="system-ui" font-size="10" text-anchor="middle">
+          <circle cx="566" cy="246" r="9" fill="#e9f1fa" stroke="#9cc4e8"/><text x="566" y="249" fill="#185fa5">S</text>
+          <circle cx="588" cy="246" r="9" fill="#ffffff" stroke="#e4e2db"/><text x="588" y="249" fill="#8a8980">T</text>
+          <circle cx="610" cy="246" r="9" fill="#e9f1fa" stroke="#9cc4e8"/><text x="610" y="249" fill="#185fa5">Q</text>
+          <circle cx="632" cy="246" r="9" fill="#ffffff" stroke="#e4e2db"/><text x="632" y="249" fill="#8a8980">Q</text>
+          <circle cx="654" cy="246" r="9" fill="#e9f1fa" stroke="#9cc4e8"/><text x="654" y="249" fill="#185fa5">S</text>
+          <circle cx="676" cy="246" r="9" fill="#ffffff" stroke="#e4e2db"/><text x="676" y="249" fill="#8a8980">S</text>
+          <circle cx="698" cy="246" r="9" fill="#ffffff" stroke="#e4e2db"/><text x="698" y="249" fill="#8a8980">D</text>
+        </g>
+        <rect x="560" y="264" width="14" height="14" rx="3" fill="#e9f1fa" stroke="#9cc4e8"/><path d="M563 271 l2.2 2.2 l4-4.2" stroke="#185fa5" stroke-width="1.4" fill="none"/>
+        <text x="582" y="275" font-family="system-ui" font-size="11.5" fill="#56554e">Ignorar feriados</text>
+        <path d="M538 292 H780" stroke="#e4e2db"/>
+        <rect x="538" y="304" width="14" height="14" rx="3" fill="#e9f1fa" stroke="#9cc4e8"/><path d="M541 311 l2.2 2.2 l4-4.2" stroke="#185fa5" stroke-width="1.4" fill="none"/>
+        <text x="560" y="315" font-family="system-ui" font-size="11.5" fill="#1c1c1a">Acompanhar conclusão</text>
+        <text x="700" y="315" font-family="system-ui" font-size="9.5" fill="#a9a89f" text-anchor="end">padrão: Estudar</text>
+        <text x="538" y="340" font-family="system-ui" font-size="11.5" fill="#8a8980">Status</text>
+        <rect x="700" y="329" width="80" height="16" rx="4" fill="#f0efe9"/><text x="740" y="341" font-family="system-ui" font-size="10.5" fill="#56554e" text-anchor="middle">Agendado</text>
+        <rect x="538" y="354" width="118" height="26" rx="6" fill="#ecf4df" stroke="#bcd99a"/><text x="597" y="371" font-family="system-ui" font-size="11.5" fill="#3b6d11" text-anchor="middle">✓ Concluir</text>
+        <rect x="662" y="354" width="118" height="26" rx="6" fill="#ffffff" stroke="#d8d6cd"/><text x="721" y="371" font-family="system-ui" font-size="11.5" fill="#56554e" text-anchor="middle">↻ Remarcar</text>
+        <path d="M538 394 H780" stroke="#e4e2db"/>
+        <text x="538" y="416" font-family="system-ui" font-size="11.5" fill="#a32d2d">🗑 Excluir</text>
+        <rect x="712" y="402" width="68" height="26" rx="6" fill="#e9f1fa" stroke="#9cc4e8"/><text x="746" y="419" font-family="system-ui" font-size="11.5" font-weight="600" fill="#185fa5" text-anchor="middle">Salvar</text>
+      </svg>
+    </div>
+    <figcaption><b>Seleção de classe.</b> O tipo de atividade é escolhido aqui (Estudar selecionado); ele define a cor e já pré-marca o <em>Acompanhar conclusão</em>. O calendário continua visível ao lado.</figcaption>
+    </figure>
+
+    <h3>5.5 Tela 5 — Estado PENDENTE</h3>
+    <p><strong>Decisão.</strong> O calendário marca o bloco pendente inline (cor da classe + borda tracejada âmbar + ⚠). Um indicador <strong>Pendentes · N</strong> na barra superior abre o painel lateral com a lista; cada item traz Concluir/Remarcar. Concluir encerra; Remarcar devolve ao Inbox.</p>
+    <figure class="wf"><div class="wf-frame">
+      <svg viewBox="0 0 800 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Wireframe do painel de pendentes">
+        <rect x="1" y="1" width="798" height="468" rx="12" fill="#ffffff" stroke="#e4e2db"/>
+        <rect x="1" y="1" width="798" height="36" rx="12" fill="#f6f5f1"/><rect x="1" y="20" width="798" height="17" fill="#f6f5f1"/><path d="M1 37 H799" stroke="#e4e2db"/>
+        <text x="18" y="24" font-family="system-ui" font-size="13" font-weight="600" fill="#1c1c1a">Planejador</text>
+        <rect x="470" y="9" width="98" height="19" rx="5" fill="#f9eed7" stroke="#c8993f"/><text x="519" y="22" font-family="system-ui" font-size="11" font-weight="600" fill="#8a5212" text-anchor="middle">⚠ Pendentes · 3</text>
+        <rect x="592" y="9" width="42" height="19" rx="5" fill="#ffffff" stroke="#e4e2db"/><text x="613" y="22" font-family="system-ui" font-size="11.5" fill="#8a8980" text-anchor="middle">Dia</text>
+        <rect x="636" y="9" width="60" height="19" rx="5" fill="#e9f1fa" stroke="#9cc4e8"/><text x="666" y="22" font-family="system-ui" font-size="11.5" font-weight="600" fill="#185fa5" text-anchor="middle">Semana</text>
+        <rect x="698" y="9" width="42" height="19" rx="5" fill="#ffffff" stroke="#e4e2db"/><text x="719" y="22" font-family="system-ui" font-size="11.5" fill="#8a8980" text-anchor="middle">Mês</text>
+        <g font-family="system-ui" font-size="10.5" fill="#56554e" text-anchor="middle">
+          <text x="240" y="56">Seg 15</text><text x="330" y="56">Ter</text><text x="420" y="56">Qua</text>
+        </g>
+        <path d="M169 64 H520" stroke="#e4e2db"/>
+        <g stroke="#eeece6"><path d="M286 64 V469"/><path d="M376 64 V469"/><path d="M466 64 V469"/></g>
+        <g font-family="system-ui" font-size="10">
+          <rect x="200" y="200" width="80" height="34" rx="4" fill="#ecf4df" stroke="#ba7517" stroke-dasharray="3 2"/><text x="207" y="220" fill="#3b6d11">⚠ Estudar P1</text>
+          <rect x="290" y="120" width="80" height="34" rx="4" fill="#e1f5ee" stroke="#ba7517" stroke-dasharray="3 2"/><text x="297" y="140" fill="#0f6e56">⚠ Projeto</text>
+          <rect x="290" y="280" width="80" height="34" rx="4" fill="#ecf4df" stroke="#ba7517" stroke-dasharray="3 2"/><text x="297" y="300" fill="#3b6d11">⚠ Estudar Fís.</text>
+        </g>
+        <rect x="520" y="37" width="279" height="432" fill="#ffffff"/><path d="M520 37 V469" stroke="#d8d6cd"/>
+        <text x="538" y="62" font-family="system-ui" font-size="13" font-weight="600" fill="#1c1c1a">Pendentes</text>
+        <text x="780" y="62" font-family="system-ui" font-size="14" fill="#a9a89f" text-anchor="end">✕</text>
+        <text x="538" y="80" font-family="system-ui" font-size="11" fill="#8a8980">3 itens esperando sua decisão</text>
+        <g>
+          <rect x="538" y="92" width="242" height="76" rx="8" fill="#fdfcf9" stroke="#e4e2db"/><rect x="538" y="92" width="4" height="76" rx="2" fill="#6da12f"/>
+          <text x="552" y="112" font-family="system-ui" font-size="11.5" font-weight="600" fill="#1c1c1a">Estudar P1 Cálculo</text>
+          <text x="552" y="127" font-family="system-ui" font-size="10.5" fill="#8a5212">⚠ ontem · 13:00–15:00</text>
+          <rect x="552" y="136" width="84" height="22" rx="6" fill="#ecf4df" stroke="#bcd99a"/><text x="594" y="151" font-family="system-ui" font-size="11" fill="#3b6d11" text-anchor="middle">✓ Concluir</text>
+          <rect x="644" y="136" width="92" height="22" rx="6" fill="#ffffff" stroke="#d8d6cd"/><text x="690" y="151" font-family="system-ui" font-size="11" fill="#56554e" text-anchor="middle">↻ Remarcar</text>
+
+          <rect x="538" y="178" width="242" height="76" rx="8" fill="#fdfcf9" stroke="#e4e2db"/><rect x="538" y="178" width="4" height="76" rx="2" fill="#1d9e75"/>
+          <text x="552" y="198" font-family="system-ui" font-size="11.5" font-weight="600" fill="#1c1c1a">Projeto InfoClínicas</text>
+          <text x="552" y="213" font-family="system-ui" font-size="10.5" fill="#8a5212">⚠ ontem · 15:30–18:00</text>
+          <rect x="552" y="222" width="84" height="22" rx="6" fill="#ecf4df" stroke="#bcd99a"/><text x="594" y="237" font-family="system-ui" font-size="11" fill="#3b6d11" text-anchor="middle">✓ Concluir</text>
+          <rect x="644" y="222" width="92" height="22" rx="6" fill="#ffffff" stroke="#d8d6cd"/><text x="690" y="237" font-family="system-ui" font-size="11" fill="#56554e" text-anchor="middle">↻ Remarcar</text>
+
+          <rect x="538" y="264" width="242" height="76" rx="8" fill="#fdfcf9" stroke="#e4e2db"/><rect x="538" y="264" width="4" height="76" rx="2" fill="#6da12f"/>
+          <text x="552" y="284" font-family="system-ui" font-size="11.5" font-weight="600" fill="#1c1c1a">Estudar Física</text>
+          <text x="552" y="299" font-family="system-ui" font-size="10.5" fill="#8a5212">⚠ hoje · 09:00–11:00</text>
+          <rect x="552" y="308" width="84" height="22" rx="6" fill="#ecf4df" stroke="#bcd99a"/><text x="594" y="323" font-family="system-ui" font-size="11" fill="#3b6d11" text-anchor="middle">✓ Concluir</text>
+          <rect x="644" y="308" width="92" height="22" rx="6" fill="#ffffff" stroke="#d8d6cd"/><text x="690" y="323" font-family="system-ui" font-size="11" fill="#56554e" text-anchor="middle">↻ Remarcar</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><b>Classe + estado.</b> A faixa colorida à esquerda de cada card indica a classe; o ⚠ âmbar sinaliza a pendência. Só classes rastreáveis (Estudar, Trabalho) chegam aqui.</figcaption>
+    </figure>
+
+    <h3>5.6 Tela 6 — Painel de Sugestões (Fase 2)</h3>
+    <p><strong>Decisão.</strong> <strong>Propostas de horário.</strong> O motor lista as tarefas do Inbox ranqueadas por prioridade e, para cada uma, propõe um horário concreto nos espaços livres da semana, com Aceitar / Outro horário / Dispensar.</p>
+    <div class="note"><p><span class="k">Enriquecimento (hover-preview).</span> Ao passar o mouse sobre uma proposta, o calendário exibe um <em>rascunho tentativo</em> (bloco fantasma tracejado, na cor da classe) na posição sugerida, prevendo a colocação antes de aceitar. Aceitar materializa o bloco; sair do hover remove o rascunho. O motor nunca agenda sozinho.</p></div>
+    <figure class="wf"><div class="wf-frame">
+      <svg viewBox="0 0 800 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Wireframe do painel de sugestões com preview por hover">
+        <rect x="1" y="1" width="798" height="468" rx="12" fill="#ffffff" stroke="#e4e2db"/>
+        <rect x="1" y="1" width="798" height="36" rx="12" fill="#f6f5f1"/><rect x="1" y="20" width="798" height="17" fill="#f6f5f1"/><path d="M1 37 H799" stroke="#e4e2db"/>
+        <text x="18" y="24" font-family="system-ui" font-size="13" font-weight="600" fill="#1c1c1a">Planejador</text>
+        <rect x="448" y="9" width="120" height="19" rx="5" fill="#e9f1fa" stroke="#9cc4e8"/><text x="508" y="22" font-family="system-ui" font-size="11" font-weight="600" fill="#185fa5" text-anchor="middle">＋ Planejar semana</text>
+        <rect x="592" y="9" width="42" height="19" rx="5" fill="#ffffff" stroke="#e4e2db"/><text x="613" y="22" font-family="system-ui" font-size="11.5" fill="#8a8980" text-anchor="middle">Dia</text>
+        <rect x="636" y="9" width="60" height="19" rx="5" fill="#e9f1fa" stroke="#9cc4e8"/><text x="666" y="22" font-family="system-ui" font-size="11.5" font-weight="600" fill="#185fa5" text-anchor="middle">Semana</text>
+        <rect x="698" y="9" width="42" height="19" rx="5" fill="#ffffff" stroke="#e4e2db"/><text x="719" y="22" font-family="system-ui" font-size="11.5" fill="#8a8980" text-anchor="middle">Mês</text>
+        <g font-family="system-ui" font-size="10.5" fill="#56554e" text-anchor="middle">
+          <text x="240" y="56">Seg 15</text><text x="330" y="56">Ter 16</text><text x="420" y="56">Qua</text>
+        </g>
+        <path d="M169 64 H520" stroke="#e4e2db"/>
+        <g stroke="#eeece6"><path d="M286 64 V469"/><path d="M376 64 V469"/><path d="M466 64 V469"/></g>
+        <g font-family="system-ui" font-size="10">
+          <rect x="200" y="84" width="80" height="40" rx="4" fill="#e6f1fb" stroke="#9cc4e8"/><text x="207" y="100" fill="#185fa5">Física</text>
+        </g>
+        <rect x="290" y="200" width="80" height="60" rx="4" fill="#f3f8ee" stroke="#b9d795" stroke-dasharray="4 3"/>
+        <text x="297" y="218" font-family="system-ui" font-size="10" fill="#3b6d11">Estudar P1</text>
+        <text x="297" y="232" font-family="system-ui" font-size="9" fill="#7fa05a">rascunho</text>
+        <text x="247" y="290" font-family="system-ui" font-size="9.5" fill="#a9a89f">▲ preview ao passar o mouse</text>
+        <rect x="520" y="37" width="279" height="432" fill="#ffffff"/><path d="M520 37 V469" stroke="#d8d6cd"/>
+        <text x="538" y="62" font-family="system-ui" font-size="13" font-weight="600" fill="#1c1c1a">Plano sugerido</text>
+        <text x="538" y="80" font-family="system-ui" font-size="11" fill="#8a8980">Aceite o horário ou escolha outro</text>
+        <rect x="538" y="92" width="242" height="100" rx="8" fill="#ffffff" stroke="#9cc4e8" stroke-width="1.5"/>
+        <rect x="550" y="104" width="42" height="16" rx="4" fill="#f9eed7"/><text x="571" y="116" font-family="system-ui" font-size="10" fill="#8a5212" text-anchor="middle">Alta</text>
+        <rect x="598" y="104" width="58" height="16" rx="4" fill="#ecf4df"/><text x="627" y="116" font-family="system-ui" font-size="10" fill="#3b6d11" text-anchor="middle">Estudar</text>
+        <text x="772" y="116" font-family="system-ui" font-size="10.5" fill="#8a8980" text-anchor="end">3h</text>
+        <text x="550" y="138" font-family="system-ui" font-size="11.5" font-weight="600" fill="#1c1c1a">Estudar P1 Cálculo</text>
+        <rect x="550" y="146" width="180" height="18" rx="4" fill="#ecf4df" stroke="#b9d795"/><text x="560" y="159" font-family="system-ui" font-size="10.5" fill="#3b6d11">▦ Ter 16 · 14:00–17:00</text>
+        <rect x="550" y="170" width="80" height="20" rx="6" fill="#ecf4df" stroke="#bcd99a"/><text x="590" y="184" font-family="system-ui" font-size="11" font-weight="600" fill="#3b6d11" text-anchor="middle">✓ Aceitar</text>
+        <rect x="638" y="170" width="96" height="20" rx="6" fill="#ffffff" stroke="#d8d6cd"/><text x="686" y="184" font-family="system-ui" font-size="11" fill="#56554e" text-anchor="middle">Outro horário</text>
+        <rect x="538" y="202" width="242" height="92" rx="8" fill="#ffffff" stroke="#e4e2db"/>
+        <rect x="550" y="214" width="54" height="16" rx="4" fill="#e3e7ea"/><text x="577" y="226" font-family="system-ui" font-size="10" fill="#56554e" text-anchor="middle">Média</text>
+        <rect x="610" y="214" width="60" height="16" rx="4" fill="#e1f5ee"/><text x="640" y="226" font-family="system-ui" font-size="10" fill="#0f6e56" text-anchor="middle">Trabalho</text>
+        <text x="772" y="226" font-family="system-ui" font-size="10.5" fill="#8a8980" text-anchor="end">2h</text>
+        <text x="550" y="248" font-family="system-ui" font-size="11.5" font-weight="600" fill="#1c1c1a">Relatório Física</text>
+        <rect x="550" y="256" width="180" height="18" rx="4" fill="#e1f5ee" stroke="#9fe1cb"/><text x="560" y="269" font-family="system-ui" font-size="10.5" fill="#0f6e56">▦ Qua 17 · 15:00–17:00</text>
+        <rect x="550" y="280" width="80" height="6" rx="3" fill="#f0efe9"/>
+      </svg>
+    </div>
+    <figcaption><b>O “quando” sugerido.</b> A proposta carrega a classe da tarefa; o rascunho no calendário aparece na cor dessa classe. Cada item é um aceitar/dispensar.</figcaption>
+    </figure>
+
+    <h3>5.7 Cores e estados (resumo)</h3>
+    <p>A cor de um evento vem sempre da sua <strong>classe</strong> (Aula azul, Tarefas básicas cinza, Estudar verde, Prova vermelho, e as classes que o usuário criar). O <strong>estado</strong> é mostrado por tratamento, não por cor: <em>pendente</em> = mesma cor com borda tracejada âmbar e ícone de alerta; <em>concluído</em> = mesma cor esmaecida com check; <em>rascunho sugerido</em> (Fase 2) = bloco fantasma tracejado. O <strong>feriado</strong> é um marcador de dia (fundo/etiqueta), não um bloco — assim não colide com a classe Prova, em vermelho. Na visão mensal, a densidade usa um tom neutro à parte, para não competir com as cores das classes.</p>
+  </section>
+
+  <!-- 6 -->
+  <section id="s6">
+    <h2><span class="n">6</span>Stack e Arquitetura</h2>
+
+    <h3>6.1 Frontend</h3>
+    <ul class="clean">
+      <li><strong>React + Vite</strong> como base.</li>
+      <li><strong>Zustand</strong> para estado local (interação intensa: arrasto, hover, expand, modal).</li>
+      <li><strong>FullCalendar</strong> para as views mensal, semanal e diária.</li>
+      <li><strong>@dnd-kit</strong> para o arrasto Inbox → calendário.</li>
+      <li><strong>shadcn/ui</strong> para componentes. Deploy em <strong>Vercel</strong>.</li>
+    </ul>
+
+    <h3>6.2 Backend</h3>
+    <ul class="clean">
+      <li><strong>Django REST Framework</strong> + <strong>PostgreSQL</strong>.</li>
+      <li>Recorrência via <strong>rrule</strong> (<code>python-dateutil</code>; <code>django-recurrence</code> opcional).</li>
+      <li>Feriados via <strong>BrasilAPI</strong> (<code>brasilapi.com.br/feriados</code>).</li>
+      <li><strong>Celery</strong> para tarefas assíncronas (uso futuro). Deploy em <strong>Docker</strong> sobre EC2 ou Railway.</li>
+    </ul>
+
+    <h3>6.3 Infraestrutura</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Camada</th><th>Tecnologia</th></tr></thead>
+      <tbody>
+        <tr><td>Frontend</td><td>Vercel (CDN, deploy automático)</td></tr>
+        <tr><td>Backend</td><td>Docker em EC2 ou Railway</td></tr>
+        <tr><td>Banco</td><td>PostgreSQL (RDS ou Railway)</td></tr>
+        <tr><td>Feriados</td><td>BrasilAPI</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>6.4 Decisões de arquitetura</h3>
+    <p>O projeto adota <strong>PWA desde o início</strong> (service worker + manifest) para suavizar a futura migração mobile, reaproveitando a lógica de negócio em React Native/Expo. As datas são <strong>timezone-aware</strong>, armazenadas com fuso explícito no backend e convertidas no frontend. O <strong>estado local é centralizado</strong> no cliente, de modo que as interações do calendário não geram tráfego desnecessário. Por fim, <strong>não há SSR</strong>: o produto não tem necessidade de SEO, o que tornaria Next.js um excesso.</p>
+
+    <h3>6.5 Diagrama de arquitetura</h3>
+    <figure class="wf"><div class="wf-frame">
+      <svg viewBox="0 0 800 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagrama de arquitetura em duas camadas">
+        <rect x="40" y="16" width="720" height="78" rx="10" fill="#e9f1fa" stroke="#9cc4e8"/>
+        <text x="58" y="40" font-family="system-ui" font-size="12" font-weight="600" fill="#185fa5">FRONTEND</text>
+        <text x="58" y="60" font-family="system-ui" font-size="12.5" fill="#1c1c1a">React + Vite · Zustand · FullCalendar · @dnd-kit · shadcn/ui</text>
+        <text x="58" y="80" font-family="system-ui" font-size="12" fill="#56554e">PWA (service worker + manifest) · Deploy: Vercel</text>
+        <path d="M400 94 V136" stroke="#9cc4e8" stroke-width="1.5"/>
+        <polygon points="400,136 395,128 405,128" fill="#9cc4e8"/>
+        <text x="412" y="120" font-family="system-ui" font-size="11" fill="#8a8980">REST (JSON)</text>
+        <rect x="40" y="136" width="720" height="80" rx="10" fill="#f6f5f1" stroke="#d8d6cd"/>
+        <text x="58" y="160" font-family="system-ui" font-size="12" font-weight="600" fill="#56554e">BACKEND</text>
+        <text x="58" y="180" font-family="system-ui" font-size="12.5" fill="#1c1c1a">Django REST Framework · PostgreSQL</text>
+        <text x="58" y="200" font-family="system-ui" font-size="12" fill="#56554e">rrule (recorrência) · BrasilAPI (feriados) · Celery (futuro) · Docker em EC2 / Railway</text>
+      </svg>
+    </div></figure>
+  </section>
+
+  <!-- 7 -->
+  <section id="s7">
+    <h2><span class="n">7</span>Escopo do MVP</h2>
+
+    <h3>7.1 Fase 1 — Core funcional</h3>
+    <p>A primeira fase entrega o produto utilizável de ponta a ponta: as três views (Dia, Semana e Mês) com toggle; criação e edição de eventos com início/fim e detalhes no painel lateral; as <strong>classes</strong> (tipo de atividade, com cor e padrão de conclusão) definíveis pelo usuário e o <code>rastrear_conclusao</code> com padrão por classe e override; a recorrência (dias da semana ou do mês + ignorar feriados) com estado por ocorrência; o Inbox de tarefas; a promoção Inbox → calendário via arrasto na visão semanal; a máquina de estados <code>AGENDADO → PENDENTE → CONCLUIDO/REMARCADO</code>, com Remarcar devolvendo ao Inbox; o painel de Pendentes (indicador na barra + lista no painel lateral); a estratégia híbrida de densidade na visão mensal; e a integração de feriados via BrasilAPI.</p>
+
+    <h3>7.2 Fase 2 — Motor de sugestões</h3>
+    <p>A segunda fase adiciona, sobre o core, os campos <code>deadline</code> e <code>esforco_estimado</code> nas tarefas; o cálculo de prioridade (urgência × esforço × capacidade livre); o painel de propostas de horário (Aceitar / Outro horário / Dispensar); e o rascunho tentativo por hover, que previsualiza a colocação no calendário.</p>
+
+    <h3>7.3 Fora de escopo (MVP)</h3>
+    <p>Ficam de fora o app mobile nativo (apenas a PWA é preparada), a geração automática da semana inteira (evolução futura do motor) e recursos de colaboração/compartilhamento, notificações push e integrações externas como Google Calendar.</p>
+  </section>
+
+  <!-- 8 -->
+  <section id="s8">
+    <h2><span class="n">8</span>Motor de Priorização <span style="font-family:var(--sans);font-size:14px;font-weight:400;color:var(--muted)">— Fase 2 (detalhe)</span></h2>
+
+    <h3>8.1 Inputs</h3>
+    <p>O motor consome as tarefas do Inbox que tenham <code>deadline</code> e <code>esforco_estimado</code>, e a capacidade livre do calendário na semana-alvo (os horários sem evento).</p>
+
+    <h3>8.2 Lógica de score</h3>
+    <p>Cada tarefa recebe um score que combina três fatores. A <strong>urgência</strong> decai com a distância até a deadline — quanto mais próximo, maior. O <strong>esforço</strong> pondera o quanto a tarefa precisa começar cedo para caber antes do prazo. A <strong>viabilidade</strong> confronta a tarefa com os espaços livres, destacando aquelas que não cabem antes da deadline. Tarefas sem deadline recebem prioridade baixa. Os pesos dos fatores são ajustáveis, como parâmetro do motor.</p>
+
+    <h3>8.3 Comportamento</h3>
+    <p>As propostas são individuais, cada uma com horário sugerido e ações Aceitar / Outro horário / Dispensar. O hover sobre uma proposta previsualiza o bloco no calendário (rascunho tentativo); aceitar o materializa. O motor jamais agenda sozinho — toda colocação exige confirmação explícita do usuário.</p>
+  </section>
+
+  <!-- 9 -->
+  <section id="s9">
+    <h2><span class="n">9</span>Glossário</h2>
+    <dl class="defs">
+      <dt>Classe</dt><dd>Tipo de atividade (Aula, Tarefas básicas, Estudar, Prova…) que define a cor de um evento e o seu padrão de rastreamento de conclusão.</dd>
+      <dt>Inbox</dt><dd>Lista de tarefas sem horário.</dd>
+      <dt>Bloco</dt><dd>Evento rastreável agendado a partir de uma tarefa (tipicamente da classe Estudar).</dd>
+      <dt>Pendente</dt><dd>Bloco que passou do horário de fim sem decisão.</dd>
+      <dt>Ritual semanal</dt><dd>Momento deliberado de transformar tarefas do Inbox em blocos no calendário.</dd>
+      <dt>Rascunho tentativo</dt><dd>Preview fantasma de uma sugestão no calendário, exibido no hover (Fase 2).</dd>
+      <dt>Âncora</dt><dd>Na visão mensal, evento que merece chip mesmo sob alta densidade (deadline, feriado).</dd>
+    </dl>
+  </section>
+
+  <footer>
+    Planejador de Rotina · Especificação do MVP · v1.1 · 15 jun 2026 — documento autocontido (imprima para PDF via Ctrl/Cmd + P).
+  </footer>
+
+</main>
+</body>
+</html>
