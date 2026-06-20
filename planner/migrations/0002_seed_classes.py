@@ -4,6 +4,7 @@ No handoff, o seed acontecia no signal post_save de User. Como o projeto é
 local/single-user (sem usuários — ver PLAN.md), o seed roda aqui, no migrate.
 Cores e flag de rastreamento vêm da §4.1.
 """
+
 from django.db import migrations
 
 CLASSES_PADRAO = [

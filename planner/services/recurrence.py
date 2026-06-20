@@ -4,12 +4,13 @@ Um evento recorrente guarda inicio/fim da primeira ocorrência (hora do dia +
 duração) e uma RegraRecorrencia. As datas concretas são geradas sob demanda com
 dateutil.rrule, SEMPRE dentro de uma janela limitada — nunca série infinita.
 """
+
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time
 
 from dateutil.rrule import MONTHLY, WEEKLY, rrule
 
-from ..models import Evento, Ocorrencia, RegraRecorrencia
+from ..models import Evento, RegraRecorrencia
 
 
 @dataclass
@@ -79,13 +80,9 @@ def expandir(evento, janela_inicio, janela_fim, feriados):
         until = min(until, data_fim_dt)
 
     if regra.tipo == RegraRecorrencia.Tipo.SEMANAL:
-        rule = rrule(
-            WEEKLY, dtstart=evento.inicio, until=until, byweekday=regra.dias
-        )
+        rule = rrule(WEEKLY, dtstart=evento.inicio, until=until, byweekday=regra.dias)
     else:  # MENSAL
-        rule = rrule(
-            MONTHLY, dtstart=evento.inicio, until=until, bymonthday=regra.dias
-        )
+        rule = rrule(MONTHLY, dtstart=evento.inicio, until=until, bymonthday=regra.dias)
 
     persistidas = {oc.data: oc for oc in evento.ocorrencias.all()}
 

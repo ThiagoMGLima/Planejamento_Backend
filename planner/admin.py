@@ -1,4 +1,5 @@
 """Registro no Django admin — apoio a debug/seed (Handoff §13, Marco 1)."""
+
 from django.contrib import admin
 
 from .models import Classe, Evento, Ocorrencia, RegraRecorrencia, Tarefa

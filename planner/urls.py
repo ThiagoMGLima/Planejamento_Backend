@@ -3,6 +3,7 @@
 DefaultRouter com classes/tarefas/eventos (+ ações promover/concluir/remarcar)
 e as rotas avulsas health, pendentes e feriados.
 """
+
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
