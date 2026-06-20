@@ -125,12 +125,10 @@ class EventoSerializer(serializers.ModelSerializer):
         }
 
     def get_status_efetivo(self, obj):
-        """Stub do Marco 2: devolve o status persistido.
+        """Derivação de PENDENTE via services/completion (Handoff §5.1)."""
+        from .services.completion import status_efetivo
 
-        A derivação de PENDENTE (agora > fim + rastreável + AGENDADO) entra no
-        Marco 3 via services/completion.py.
-        """
-        return obj.status
+        return status_efetivo(obj)
 
     def validate(self, attrs):
         inicio = attrs.get("inicio", getattr(self.instance, "inicio", None))

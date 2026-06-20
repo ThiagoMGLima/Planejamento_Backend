@@ -1,16 +1,18 @@
 """Views da API (Handoff §8).
 
-Marco 2: CRUD de Classe, Tarefa e Evento + ação `promover`. A janela de eventos
-com expansão de ocorrências, `concluir`/`remarcar`, pendentes e feriados entram
-no Marco 3.
+Marco 3 acrescenta: janela de eventos com expansão de ocorrências, transições
+concluir/remarcar (com escopo), pendentes e feriados.
 """
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.db import transaction
 from django.db.models import ProtectedError
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import status as http_status
 from rest_framework import viewsets
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
@@ -22,6 +24,10 @@ from .serializers import (
     PromoverSerializer,
     TarefaSerializer,
 )
+from .services import completion, holidays
+from .services.recurrence import expandir
+
+JANELA_MAX = timedelta(days=92)
 
 
 @api_view(["GET"])
@@ -56,11 +62,7 @@ class TarefaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def promover(self, request, pk=None):
-        """Arrasto Inbox → calendário (Handoff §8.2).
-
-        Cria um Evento herdando classe e rastrear_conclusao, liga origem_tarefa
-        e marca a Tarefa como PROMOVIDA. Sem `fim`, usa esforco_estimado ou 1h.
-        """
+        """Arrasto Inbox → calendário (Handoff §8.2)."""
         tarefa = self.get_object()
         entrada = PromoverSerializer(data=request.data)
         entrada.is_valid(raise_exception=True)
@@ -107,3 +109,166 @@ class EventoViewSet(viewsets.ModelViewSet):
         "classe", "regra_recorrencia", "origem_tarefa"
     ).all()
     serializer_class = EventoSerializer
+
+    def list(self, request, *args, **kwargs):
+        """GET /eventos?inicio&fim → ocorrências expandidas (Handoff §8.3).
+
+        inicio/fim são obrigatórios; recusa janela aberta, naive ou > ~92 dias.
+        """
+        inicio = self._parse_janela(request.query_params.get("inicio"), "inicio")
+        fim = self._parse_janela(request.query_params.get("fim"), "fim")
+        if fim <= inicio:
+            raise ValidationError({"fim": "fim deve ser maior que inicio."})
+        if fim - inicio > JANELA_MAX:
+            raise ValidationError(
+                {"detail": "Janela máxima de ~92 dias."}
+            )
+
+        feriados = set()
+        for ano in range(inicio.year, fim.year + 1):
+            feriados |= holidays.feriados_do_ano(ano)
+
+        itens = []
+        # Eventos não recorrentes que cruzam a janela.
+        simples = (
+            Evento.objects.filter(
+                regra_recorrencia__isnull=True, inicio__lt=fim, fim__gt=inicio
+            )
+            .select_related("classe", "origem_tarefa")
+        )
+        for ev in simples:
+            payload = EventoSerializer(ev).data
+            payload["ocorrencia"] = None
+            itens.append(payload)
+
+        # Eventos recorrentes: expande dentro da janela.
+        recorrentes = (
+            Evento.objects.filter(regra_recorrencia__isnull=False)
+            .select_related("classe", "regra_recorrencia", "origem_tarefa")
+            .prefetch_related("ocorrencias")
+        )
+        for ev in recorrentes:
+            for view in expandir(ev, inicio, fim, feriados):
+                itens.append(self._payload_ocorrencia(ev, view))
+
+        itens.sort(key=lambda x: x["inicio"])
+        return Response(itens)
+
+    @staticmethod
+    def _parse_janela(valor, campo):
+        if not valor:
+            raise ValidationError({campo: "Parâmetro obrigatório."})
+        dt = parse_datetime(valor)
+        if dt is None:
+            raise ValidationError({campo: "Inválido (use ISO-8601 com offset)."})
+        if timezone.is_naive(dt):
+            raise ValidationError(
+                {campo: "Datas devem ser tz-aware (com offset)."}
+            )
+        return dt
+
+    @staticmethod
+    def _payload_ocorrencia(evento, view):
+        payload = EventoSerializer(evento).data
+        payload["inicio"] = view.inicio.isoformat()
+        payload["fim"] = view.fim.isoformat()
+        payload["status"] = view.status
+        payload["status_efetivo"] = completion.status_efetivo(view)
+        payload["ocorrencia"] = {
+            "data": view.data.isoformat(),
+            "persistida": view.persistida,
+        }
+        return payload
+
+    @action(detail=True, methods=["post"])
+    def concluir(self, request, pk=None):
+        evento = self.get_object()
+        escopo, data = self._parse_escopo(request, evento)
+        resultado = completion.concluir(evento, escopo=escopo, data=data)
+        if escopo == "serie":
+            return Response(EventoSerializer(evento).data)
+        return Response(
+            {
+                "evento": str(evento.id),
+                "data": data.isoformat(),
+                "status_override": resultado.status_override,
+            }
+        )
+
+    @action(detail=True, methods=["post"])
+    def remarcar(self, request, pk=None):
+        evento = self.get_object()
+        escopo, data = self._parse_escopo(request, evento)
+        resultado, tarefa = completion.remarcar(evento, escopo=escopo, data=data)
+        body = {"tarefa_reaberta": TarefaSerializer(tarefa).data}
+        if escopo == "serie":
+            body["evento"] = EventoSerializer(evento).data
+        else:
+            body["evento"] = str(evento.id)
+            body["data"] = data.isoformat()
+            body["status_override"] = resultado.status_override
+        return Response(body)
+
+    @staticmethod
+    def _parse_escopo(request, evento):
+        """Resolve ?escopo=ocorrencia|serie (Handoff §8.3).
+
+        Não recorrente → sempre 'serie'. 'ocorrencia' exige ?data=YYYY-MM-DD.
+        """
+        escopo = request.query_params.get("escopo")
+        if evento.regra_recorrencia is None:
+            return "serie", None
+        escopo = escopo or "ocorrencia"
+        if escopo not in ("ocorrencia", "serie"):
+            raise ValidationError({"escopo": "Use 'ocorrencia' ou 'serie'."})
+        if escopo == "serie":
+            return "serie", None
+        data_str = request.query_params.get("data")
+        if not data_str:
+            raise ValidationError(
+                {"data": "Obrigatório para escopo=ocorrencia (YYYY-MM-DD)."}
+            )
+        try:
+            data = date.fromisoformat(data_str)
+        except ValueError:
+            raise ValidationError({"data": "Formato inválido (use YYYY-MM-DD)."})
+        return "ocorrencia", data
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def pendentes(request):
+    """GET /pendentes → eventos rastreáveis com status_efetivo == PENDENTE.
+
+    Ordem por `fim` asc (Handoff §8.4). PENDENTE é calculado, nunca gravado:
+    filtramos pelas condições que o derivam (rastreável, ainda AGENDADO,
+    agora > fim). Cobre eventos não recorrentes; ocorrências recorrentes
+    pendentes dependem de janela (ver GET /eventos).
+    """
+    agora = timezone.now()
+    qs = (
+        Evento.objects.filter(
+            regra_recorrencia__isnull=True,
+            rastrear_conclusao=True,
+            status=Evento.Status.AGENDADO,
+            fim__lt=agora,
+        )
+        .select_related("classe", "origem_tarefa")
+        .order_by("fim")
+    )
+    return Response(EventoSerializer(qs, many=True).data)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def feriados(request):
+    """GET /feriados?ano=2026 → feriados nacionais (Handoff §7/§8.4)."""
+    ano = request.query_params.get("ano")
+    if not ano:
+        raise ValidationError({"ano": "Parâmetro obrigatório."})
+    try:
+        ano = int(ano)
+    except ValueError:
+        raise ValidationError({"ano": "Deve ser um inteiro."})
+    datas = sorted(holidays.feriados_do_ano(ano))
+    return Response({"ano": ano, "feriados": [d.isoformat() for d in datas]})
