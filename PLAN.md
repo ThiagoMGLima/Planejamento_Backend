@@ -12,17 +12,25 @@ O Planejador de Rotina hoje tem apenas documentação (Especificação v1.1, Han
 Design e o **Handoff de Backend - MVP**). Não existe código de backend. Este plano
 executa a **Fase 1** do backend conforme o handoff, que é a fonte da verdade de
 implementação (modelo de dados, contrato REST, máquina de estados, recorrência,
-feriados, timezone, auth, Docker).
+feriados, timezone, Docker).
 
 Decisões que moldam o plano:
-- **Repositório separado** `planejador-backend` (split deploy: backend Railway/EC2,
-  frontend Vercel).
+- **Projeto pessoal, execução 100% local.** Não há deploy em servidor — roda na
+  máquina do dono via `docker compose up`. Sem provedores de nuvem, sem domínio público.
+- **Single-user, sem autenticação.** Como é de uso pessoal e local, não há login/JWT
+  nem multiusuário. Os models **não** têm dono; toda a API é aberta (acessível só em
+  `localhost`). O contrato do handoff é seguido **menos** a parte de auth/escopo por dono.
+- **Repositório separado** `planejador-backend` (frontend é um repo à parte que consome
+  esta API).
 - **Por etapas** — 4 marcos, cada um em seu PR, para revisão incremental.
-- **JWT desde já** (multiusuário, escopo por dono).
 - **Celery + Redis provisionados desde já** (terreno pronto, mesmo sem jobs reais).
 
-Resultado pretendido: uma API REST Django executável em Docker, cobrindo o checklist
-da §15 do handoff, pronta para o frontend consumir.
+Resultado pretendido: uma API REST Django executável em Docker **na máquina local**,
+cobrindo o checklist da §15 do handoff (exceto auth), pronta para o frontend consumir.
+
+> **Desvios deliberados do handoff** (por ser local/single-user): sem JWT, sem
+> endpoints `/auth/*`, sem `IsAuthenticated`/`IsOwner`, sem FK `dono` nos models e sem
+> filtro de queryset por dono. Onde o handoff fala em "dono", trate como inexistente.
 
 ---
 
@@ -38,40 +46,43 @@ da §15 do handoff, pronta para o frontend consumir.
 **Estrutura** (handoff §3): projeto `config/`, app `planner/` com `services/`.
 
 - `requirements.txt` com versões fixadas do handoff §2 (Django 5.0, DRF 3.15,
-  psycopg[binary] 3, python-dateutil, django-filter, simplejwt, django-cors-headers,
-  requests, celery+redis, gunicorn, django-environ).
+  psycopg[binary] 3, python-dateutil, django-filter, django-cors-headers,
+  requests, celery+redis, gunicorn, django-environ). **Sem** `djangorestframework-simplejwt`.
 - `config/settings.py` via `django-environ`: `DATABASE_URL` (Postgres), `USE_TZ=True`,
-  `TIME_ZONE="America/Sao_Paulo"`, DRF defaults, cache Redis (`REDIS_URL`), CORS,
-  config simplejwt. `config/celery.py` + integração em `config/__init__.py`.
-- **Models** (handoff §4) em `planner/models.py`, todos com `id` UUID, `dono` FK→User,
-  `criado_em`/`atualizado_em`:
-  - `Classe` — `nome`, `cor` (hex), `rastreia_conclusao`; unique `(dono, nome)`.
+  `TIME_ZONE="America/Sao_Paulo"`, DRF defaults com `DEFAULT_PERMISSION_CLASSES=[AllowAny]`
+  (sem auth), cache Redis (`REDIS_URL`), CORS liberado para a origem local do frontend
+  (ex.: `http://localhost:3000`/`5173`). `config/celery.py` + integração em `config/__init__.py`.
+- **Models** (handoff §4) em `planner/models.py`, todos com `id` UUID,
+  `criado_em`/`atualizado_em` (**sem** FK `dono`):
+  - `Classe` — `nome`, `cor` (hex), `rastreia_conclusao`; `nome` **unique**.
   - `Tarefa` — `titulo`, `descricao`, `classe?`, `deadline?`, `esforco_estimado?`,
     `status` (INBOX|PROMOVIDA). Campos Fase 2 no schema, sem lógica.
   - `Evento` — `titulo`, `inicio`, `fim`, `classe` (PROTECT), `rastrear_conclusao`,
     `status` (AGENDADO|CONCLUIDO|REMARCADO, nullable), `origem_tarefa?`,
-    `regra_recorrencia?`. Index `(dono, inicio, fim)`; CheckConstraint `fim > inicio`.
+    `regra_recorrencia?`. Index `(inicio, fim)`; CheckConstraint `fim > inicio`.
   - `RegraRecorrencia` — `tipo` (SEMANAL|MENSAL), `dias` (ArrayField), `ignorar_feriados`,
     `data_fim?`.
   - `Ocorrencia` — `evento` FK, `data`, `inicio_override?`, `fim_override?`,
     `status_override?`; unique `(evento, data)`.
-- Migrations iniciais. Registro no Django admin (apoio a debug/seed).
+- Migrations iniciais. **Data migration** que cria as 5 classes padrão (Aula, Tarefas
+  básicas, Estudar, Prova, Trabalho) com cores/rastreamento da handoff §4.1 — como não há
+  usuários, o seed roda no `migrate` (substitui o antigo signal `post_save` de `User`).
+- Registro no Django admin (apoio a debug/seed).
 - **Docker**: `Dockerfile` (gunicorn), `docker-compose.yml` com serviços `db` (postgres:16),
   `redis`, `web`, `celery` (worker), volumes; `.env.example` (handoff §13).
-  Entrypoint roda `migrate` + `collectstatic`.
+  Entrypoint roda `migrate` + `collectstatic`. (Para desenvolvimento, `runserver` com
+  autoreload é uma alternativa ao gunicorn.)
 - Endpoint `GET /api/v1/health` → 200.
 
-**Critérios:** `docker compose up` sobe; `migrate` aplica; admin acessível; health 200.
+**Critérios:** `docker compose up` sobe; `migrate` aplica e cria as 5 classes padrão;
+admin acessível; health 200.
 
 ---
 
-## Marco 2 — Auth, serializers e CRUD  (PR 2)
+## Marco 2 — Serializers e CRUD  (PR 2)
 
-- **Auth JWT** (handoff §11): `POST /api/v1/auth/token` + `/refresh` (simplejwt).
-  Permissões `IsAuthenticated` global + `IsOwner` por objeto. Todo queryset filtra
-  `dono=request.user` (defesa em profundidade).
-- **Seed de classes padrão** via signal `post_save` de `User`: Aula, Tarefas básicas,
-  Estudar, Prova, Trabalho com cores/rastreamento da handoff §4.1.
+- **Sem camada de auth.** API aberta (`AllowAny`), sem `/auth/token`, sem permissões por
+  objeto e sem filtro de queryset por dono — todos os registros são do único usuário local.
 - **Serializers** (handoff §9) em `planner/serializers.py`:
   - `EventoSerializer`: `classe` aninhada (leitura) + `classe_id` (escrita); default de
     `rastrear_conclusao` herdado da classe; coerção de `status` (false→null;
@@ -85,7 +96,7 @@ da §15 do handoff, pronta para o frontend consumir.
   Evento herdando classe e `rastrear_conclusao`, liga `origem_tarefa`, marca Tarefa
   PROMOVIDA; `fim` = `esforco_estimado` ou 1h se ausente. `@transaction.atomic`.
 
-**Critérios:** obter token; CRUD isolado por dono; 409 ao apagar classe em uso;
+**Critérios:** CRUD funcionando nas 3 entidades; 409 ao apagar classe em uso;
 validação `fim>inicio`; promover herda classe corretamente.
 
 ---
@@ -118,13 +129,14 @@ isolado não afeta série; remarcar devolve ao Inbox; pendentes calculado, nunca
 
 - `pytest-django` + `factory_boy`. Unit em `services/`: fronteiras de `status_efetivo`;
   expansão de recorrência (semanal/mensal, feriados, data_fim, override); transação de
-  remarcar. Contrato de API: escopo por dono, 409 classe-em-uso, `fim>inicio`, rejeição
-  de janela aberta, herança em promover (handoff §14).
+  remarcar. Contrato de API: 409 classe-em-uso, `fim>inicio`, rejeição de janela aberta,
+  herança em promover (handoff §14, exceto testes de escopo por dono).
 - Lint/format `ruff` + `black`; checagem de migrations pendentes.
 - GitHub Actions CI (lint + testes + migration check) com serviço Postgres.
-- `README.md` do backend (setup, env, comandos) apontando o handoff como contrato.
+- `README.md` do backend (setup local, env, comandos) apontando o handoff como contrato
+  e registrando os desvios local/single-user.
 
-**Critérios:** suíte verde; CI passando; checklist da handoff §15 completo.
+**Critérios:** suíte verde; CI passando; checklist da handoff §15 completo (exceto auth).
 
 ---
 
@@ -134,19 +146,22 @@ isolado não afeta série; remarcar devolve ao Inbox; pendentes calculado, nunca
 - `planner/models.py`, `planner/serializers.py`, `planner/views.py`, `planner/urls.py`,
   `planner/filters.py`
 - `planner/services/{completion,recurrence,holidays}.py`
+- `planner/migrations/` (inclui a data migration das classes padrão)
 - `Dockerfile`, `docker-compose.yml`, `.env.example`, `requirements.txt`
 - `planner/tests/`, `.github/workflows/ci.yml`
 
 Reaproveitar integralmente o contrato do `Handoff de Backend - MVP.html` — ele já contém
-models, assinaturas dos serviços, payloads e endpoints de referência.
+models, assinaturas dos serviços, payloads e endpoints de referência. **Ignorar apenas a
+seção de auth/escopo por dono**, conforme as decisões acima.
 
 ---
 
-## Verificação (end-to-end)
+## Verificação (end-to-end, local)
 
 1. `cp .env.example .env` e ajustar segredos; `docker compose up --build`.
-2. `docker compose exec web python manage.py migrate` + criar superuser.
-3. `POST /api/v1/auth/token` → obter Bearer; confirmar seed de 5 classes.
+2. `docker compose exec web python manage.py migrate` (cria as 5 classes padrão) +
+   opcionalmente criar superuser para o admin.
+3. Confirmar via `GET /api/v1/classes` que as 5 classes padrão existem.
 4. Fluxo: criar Tarefa → `promover` → `GET /eventos?inicio&fim` mostra o bloco com
    `status_efetivo`; recorrente semanal aparece expandido na janela; `concluir` e
    `remarcar` (remarcar reabre Tarefa no Inbox); `GET /pendentes` lista vencidos;
