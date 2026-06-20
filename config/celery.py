@@ -2,6 +2,7 @@
 
 O worker sobe no docker-compose, mas nenhuma task é definida na Fase 1.
 """
+
 import os
 
 from celery import Celery

@@ -5,6 +5,7 @@ FK `dono`. Onde o handoff fala em "dono", trate como inexistente — há um úni
 usuário local. Constraints de unicidade que no handoff eram por-dono passam a
 ser globais.
 """
+
 from uuid import uuid4
 
 from django.contrib.postgres.fields import ArrayField
@@ -100,9 +101,7 @@ class Evento(TimestampedModel):
     descricao = models.TextField(blank=True)
     inicio = models.DateTimeField()  # tz-aware
     fim = models.DateTimeField()  # tz-aware
-    classe = models.ForeignKey(
-        Classe, on_delete=models.PROTECT, related_name="eventos"
-    )
+    classe = models.ForeignKey(Classe, on_delete=models.PROTECT, related_name="eventos")
     rastrear_conclusao = models.BooleanField()
     status = models.CharField(
         max_length=10, choices=Status.choices, null=True, blank=True

@@ -4,6 +4,7 @@ Buscar no servidor (nunca no navegador): evita CORS, rate limit e divergência.
 Cache agressivo (30 dias) + cópia stale de longa duração para sobreviver a
 falhas da API externa.
 """
+
 import logging
 from datetime import date
 
@@ -34,6 +35,8 @@ def feriados_do_ano(ano: int) -> set[date]:
         return datas
     except Exception:
         # Degradação graciosa: nunca derrubar o request do calendário (§7).
-        logger.warning("Falha ao buscar feriados de %s na BrasilAPI", ano, exc_info=True)
+        logger.warning(
+            "Falha ao buscar feriados de %s na BrasilAPI", ano, exc_info=True
+        )
         stale = cache.get(chave_stale)
         return stale if stale is not None else set()

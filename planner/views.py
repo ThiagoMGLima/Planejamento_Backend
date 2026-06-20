@@ -3,6 +3,7 @@
 Marco 3 acrescenta: janela de eventos com expansão de ocorrências, transições
 concluir/remarcar (com escopo), pendentes e feriados.
 """
+
 from datetime import date, timedelta
 
 from django.db import transaction
@@ -91,9 +92,7 @@ class TarefaViewSet(viewsets.ModelViewSet):
                 fim=fim,
                 classe=classe,
                 rastrear_conclusao=classe.rastreia_conclusao,
-                status=(
-                    Evento.Status.AGENDADO if classe.rastreia_conclusao else None
-                ),
+                status=(Evento.Status.AGENDADO if classe.rastreia_conclusao else None),
                 origem_tarefa=tarefa,
             )
             tarefa.status = Tarefa.Status.PROMOVIDA
@@ -120,9 +119,7 @@ class EventoViewSet(viewsets.ModelViewSet):
         if fim <= inicio:
             raise ValidationError({"fim": "fim deve ser maior que inicio."})
         if fim - inicio > JANELA_MAX:
-            raise ValidationError(
-                {"detail": "Janela máxima de ~92 dias."}
-            )
+            raise ValidationError({"detail": "Janela máxima de ~92 dias."})
 
         feriados = set()
         for ano in range(inicio.year, fim.year + 1):
@@ -130,12 +127,9 @@ class EventoViewSet(viewsets.ModelViewSet):
 
         itens = []
         # Eventos não recorrentes que cruzam a janela.
-        simples = (
-            Evento.objects.filter(
-                regra_recorrencia__isnull=True, inicio__lt=fim, fim__gt=inicio
-            )
-            .select_related("classe", "origem_tarefa")
-        )
+        simples = Evento.objects.filter(
+            regra_recorrencia__isnull=True, inicio__lt=fim, fim__gt=inicio
+        ).select_related("classe", "origem_tarefa")
         for ev in simples:
             payload = EventoSerializer(ev).data
             payload["ocorrencia"] = None
@@ -162,9 +156,7 @@ class EventoViewSet(viewsets.ModelViewSet):
         if dt is None:
             raise ValidationError({campo: "Inválido (use ISO-8601 com offset)."})
         if timezone.is_naive(dt):
-            raise ValidationError(
-                {campo: "Datas devem ser tz-aware (com offset)."}
-            )
+            raise ValidationError({campo: "Datas devem ser tz-aware (com offset)."})
         return dt
 
     @staticmethod

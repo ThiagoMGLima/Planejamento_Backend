@@ -4,11 +4,12 @@ Marco 2: CRUD de Classe, Tarefa e Evento + promover. A derivação real de
 `status_efetivo` (PENDENTE) chega no Marco 3; aqui é um stub que devolve o
 `status` persistido.
 """
+
 import re
 
 from rest_framework import serializers
 
-from .models import Classe, Evento, Ocorrencia, RegraRecorrencia, Tarefa
+from .models import Classe, Evento, RegraRecorrencia, Tarefa
 
 COR_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -28,9 +29,7 @@ class ClasseSerializer(serializers.ModelSerializer):
 
     def validate_cor(self, value):
         if not COR_HEX.match(value):
-            raise serializers.ValidationError(
-                "Cor deve ser um hex no formato #RRGGBB."
-            )
+            raise serializers.ValidationError("Cor deve ser um hex no formato #RRGGBB.")
         return value
 
 
@@ -74,9 +73,7 @@ class RegraRecorrenciaSerializer(serializers.ModelSerializer):
         dias = attrs.get("dias", getattr(self.instance, "dias", None))
         if dias is not None:
             if len(dias) == 0:
-                raise serializers.ValidationError(
-                    {"dias": "Informe ao menos um dia."}
-                )
+                raise serializers.ValidationError({"dias": "Informe ao menos um dia."})
             if tipo == RegraRecorrencia.Tipo.SEMANAL:
                 if any(d < 0 or d > 6 for d in dias):
                     raise serializers.ValidationError(
@@ -134,9 +131,7 @@ class EventoSerializer(serializers.ModelSerializer):
         inicio = attrs.get("inicio", getattr(self.instance, "inicio", None))
         fim = attrs.get("fim", getattr(self.instance, "fim", None))
         if inicio is not None and fim is not None and fim <= inicio:
-            raise serializers.ValidationError(
-                {"fim": "fim deve ser maior que inicio."}
-            )
+            raise serializers.ValidationError({"fim": "fim deve ser maior que inicio."})
 
         # Default de rastrear_conclusao herdado da classe no create.
         classe = attrs.get("classe", getattr(self.instance, "classe", None))
@@ -193,7 +188,5 @@ class PromoverSerializer(serializers.Serializer):
         inicio = attrs.get("inicio")
         fim = attrs.get("fim")
         if fim is not None and fim <= inicio:
-            raise serializers.ValidationError(
-                {"fim": "fim deve ser maior que inicio."}
-            )
+            raise serializers.ValidationError({"fim": "fim deve ser maior que inicio."})
         return attrs

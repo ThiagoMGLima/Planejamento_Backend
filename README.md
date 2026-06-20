@@ -12,12 +12,17 @@ e **sem autenticação** (acesso só em `localhost`).
 
 ## Status
 
-**Marco 1 — Fundação, models e admin** ✅
-Estrutura do projeto, 5 models (Classe, Tarefa, Evento, RegraRecorrencia,
-Ocorrencia), migrations + seed das 5 classes padrão, Django admin, Docker
-(Postgres + Redis + web + celery) e `GET /api/v1/health`.
+MVP (Fase 1) completo — 4 marcos:
 
-Marcos 2–4 (serializers/CRUD, recorrência/feriados, testes/CI) ainda por vir.
+- **Marco 1 — Fundação, models e admin** ✅ estrutura, 5 models, migrations +
+  seed das classes padrão, admin, Docker, `GET /api/v1/health`.
+- **Marco 2 — Serializers e CRUD** ✅ CRUD de classes/tarefas/eventos, validações
+  (§9), `POST /tarefas/{id}/promover`, 409 ao apagar classe em uso.
+- **Marco 3 — Recorrência, feriados e pendência** ✅ expansão via `rrule`,
+  BrasilAPI com cache, `status_efetivo` derivado, `concluir`/`remarcar`,
+  `GET /eventos?inicio&fim`, `/pendentes`, `/feriados`.
+- **Marco 4 — Testes, CI e finalização** ✅ pytest + factory_boy, ruff + black,
+  GitHub Actions (lint + checagem de migrations + testes com Postgres).
 
 ## Rodando localmente
 
@@ -43,10 +48,47 @@ docker compose exec web python manage.py shell -c \
   "from planner.models import Classe; print(list(Classe.objects.values_list('nome', flat=True)))"
 ```
 
+## Endpoints (base `/api/v1/`)
+
+| Método | Rota | Descrição |
+| --- | --- | --- |
+| GET | `/health` | Healthcheck → 200 |
+| GET/POST/PATCH/DELETE | `/classes/` | CRUD de classes (DELETE em uso → 409) |
+| GET/POST/PATCH/DELETE | `/tarefas/` | CRUD de tarefas (Inbox); `?status=INBOX` |
+| POST | `/tarefas/{id}/promover/` | Inbox → calendário (cria Evento) |
+| GET | `/eventos/?inicio&fim` | Janela com ocorrências expandidas (≤ ~92 dias) |
+| POST/PATCH/DELETE | `/eventos/` `/eventos/{id}/` | CRUD de eventos |
+| POST | `/eventos/{id}/concluir/` `…/remarcar/` | Transições; `?escopo=ocorrencia\|serie` |
+| GET | `/pendentes` | Eventos rastreáveis com `status_efetivo == PENDENTE` |
+| GET | `/feriados?ano=2026` | Feriados nacionais (BrasilAPI, cacheado) |
+
+Listas de `/classes/` e `/tarefas/` são paginadas por cursor (`{next, previous,
+results}`); `/eventos`, `/pendentes` e `/feriados` retornam arrays. Rotas do
+router exigem **barra no final**.
+
+## Desenvolvimento e testes
+
+```bash
+# rodar a suíte e o lint via Docker (DB já no compose)
+docker compose run --rm web sh -c "pip install -r requirements-dev.txt && pytest"
+
+# fora do Docker (precisa de Postgres acessível + DATABASE_URL):
+pip install -r requirements-dev.txt
+ruff check .
+black --check .
+python manage.py makemigrations --check --dry-run
+pytest
+```
+
+A CI (GitHub Actions, `.github/workflows/ci.yml`) roda ruff, black `--check`,
+checagem de migrations pendentes e a suíte pytest contra um Postgres de serviço.
+
 ## Stack
 
 Django 5.0 · DRF 3.15 · PostgreSQL 16 · Redis 7 · Celery 5.4 (provisionado, sem
-jobs no MVP) · gunicorn · django-environ. Versões fixadas em `requirements.txt`.
+jobs no MVP) · gunicorn · django-environ. Testes: pytest-django + factory_boy.
+Lint/format: ruff + black. Versões fixadas em `requirements.txt` /
+`requirements-dev.txt`.
 
 ## Variáveis de ambiente
 

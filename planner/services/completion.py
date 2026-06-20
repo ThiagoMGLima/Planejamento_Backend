@@ -3,6 +3,7 @@
 PENDENTE é calculado na leitura, nunca gravado. `concluir`/`remarcar` são as
 únicas transições de escrita; remarcar devolve a Tarefa de origem ao Inbox.
 """
+
 from django.db import transaction
 from django.utils import timezone
 

@@ -3,6 +3,7 @@
 Marco 2: filtro de `status` no Inbox (GET /tarefas?status=INBOX). O filtro de
 janela de eventos (inicio/fim) com expansão de ocorrências entra no Marco 3.
 """
+
 from django_filters import rest_framework as filters
 
 from .models import Tarefa
