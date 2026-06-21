@@ -25,8 +25,12 @@ services:
 
   web:
     build: .
-    command: gunicorn config.wsgi --bind 0.0.0.0:8000
+    # --reload: gunicorn reinicia ao mudar o código. Combinado com o volume
+    # abaixo, mudanças no host refletem sem rebuild da imagem (dev local).
+    command: gunicorn config.wsgi --bind 0.0.0.0:8000 --reload
     env_file: .env
+    volumes:
+      - .:/app  # código do host montado no container (dev); some no build de prod
     ports:
       - "8000:8000"
     depends_on:
@@ -49,6 +53,8 @@ services:
     entrypoint: []
     command: celery -A config worker --loglevel=info
     env_file: .env
+    volumes:
+      - .:/app  # mesmo código do host (dev), evita worker com código defasado
     depends_on:
       db:
         condition: service_healthy
