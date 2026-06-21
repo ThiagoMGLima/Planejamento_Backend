@@ -18,5 +18,15 @@ urlpatterns = [
     path("health", views.health, name="health"),
     path("pendentes", views.pendentes, name="pendentes"),
     path("feriados", views.feriados, name="feriados"),
+    path(
+        "planejamento/calcular",
+        views.planejamento_calcular,
+        name="planejamento-calcular",
+    ),
+    path(
+        "planejamento/aplicar",
+        views.planejamento_aplicar,
+        name="planejamento-aplicar",
+    ),
     path("", include(router.urls)),
 ]
