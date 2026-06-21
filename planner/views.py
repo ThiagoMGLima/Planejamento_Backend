@@ -20,12 +20,15 @@ from rest_framework.response import Response
 from .filters import TarefaFilter
 from .models import Classe, Evento, Tarefa
 from .serializers import (
+    AplicarSerializer,
+    CalcularSerializer,
     ClasseSerializer,
     EventoSerializer,
+    PlanejarSerializer,
     PromoverSerializer,
     TarefaSerializer,
 )
-from .services import completion, holidays
+from .services import completion, holidays, planejamento
 from .services.recurrence import expandir
 
 JANELA_MAX = timedelta(days=92)
@@ -91,8 +94,9 @@ class TarefaViewSet(viewsets.ModelViewSet):
                 inicio=inicio,
                 fim=fim,
                 classe=classe,
-                rastrear_conclusao=classe.rastreia_conclusao,
-                status=(Evento.Status.AGENDADO if classe.rastreia_conclusao else None),
+                # Default: todo evento acompanha conclusão (independe da classe).
+                rastrear_conclusao=True,
+                status=Evento.Status.AGENDADO,
                 origem_tarefa=tarefa,
             )
             tarefa.status = Tarefa.Status.PROMOVIDA
@@ -100,6 +104,48 @@ class TarefaViewSet(viewsets.ModelViewSet):
 
         return Response(
             EventoSerializer(evento).data, status=http_status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=["post"])
+    def planejar(self, request, pk=None):
+        """Divide a produção de um To Do em N eventos-sessão.
+
+        Recebe a divisão final (sugerida pelo app, ajustada pelo usuário) e cria
+        um Evento por sessão, todos vinculados à tarefa (origem_tarefa). A soma
+        das sessões é o tempo de produção; cada uma acompanha conclusão.
+        """
+        tarefa = self.get_object()
+        entrada = PlanejarSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        dados = entrada.validated_data
+
+        classe = dados.get("classe") or tarefa.classe
+        if classe is None:
+            return Response(
+                {"classe_id": ["Tarefa sem classe; informe classe_id."]},
+                status=http_status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            eventos = [
+                Evento.objects.create(
+                    titulo=tarefa.titulo,
+                    descricao=tarefa.descricao,
+                    inicio=s["inicio"],
+                    fim=s["fim"],
+                    classe=classe,
+                    rastrear_conclusao=True,
+                    status=Evento.Status.AGENDADO,
+                    origem_tarefa=tarefa,
+                )
+                for s in dados["sessoes"]
+            ]
+            tarefa.status = Tarefa.Status.PROMOVIDA
+            tarefa.save(update_fields=["status", "atualizado_em"])
+
+        return Response(
+            EventoSerializer(eventos, many=True).data,
+            status=http_status.HTTP_201_CREATED,
         )
 
 
@@ -264,3 +310,147 @@ def feriados(request):
         raise ValidationError({"ano": "Deve ser um inteiro."})
     datas = sorted(holidays.feriados_do_ano(ano))
     return Response({"ano": ano, "feriados": [d.isoformat() for d in datas]})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def planejamento_calcular(request):
+    """POST /planejamento/calcular → plano multitarefa (preview, não persiste).
+
+    Calcula sessões para todas as tarefas selecionadas de uma vez, sem conflito
+    com eventos existentes nem entre si. Tarefa inválida (inexistente, já
+    promovida ou sem deadline/esforço/classe) → 422 com a lista.
+    """
+    entrada = CalcularSerializer(data=request.data)
+    entrada.is_valid(raise_exception=True)
+    dados = entrada.validated_data
+
+    ids = list(dict.fromkeys(dados["tarefa_ids"]))  # dedup preservando ordem
+    por_id = {
+        t.id: t for t in Tarefa.objects.select_related("classe").filter(id__in=ids)
+    }
+
+    invalidas = []
+    validas = []
+    for tid in ids:
+        tarefa = por_id.get(tid)
+        if tarefa is None:
+            invalidas.append({"tarefa_id": str(tid), "motivo": "tarefa inexistente"})
+            continue
+        if tarefa.status == Tarefa.Status.PROMOVIDA:
+            invalidas.append({"tarefa_id": str(tid), "motivo": "tarefa já promovida"})
+            continue
+        faltando = []
+        if tarefa.deadline is None:
+            faltando.append("deadline")
+        if not tarefa.esforco_estimado:
+            faltando.append("esforco_estimado")
+        if tarefa.classe_id is None:
+            faltando.append("classe")
+        if faltando:
+            invalidas.append(
+                {"tarefa_id": str(tid), "motivo": f"faltando: {', '.join(faltando)}"}
+            )
+            continue
+        validas.append(tarefa)
+
+    if invalidas:
+        return Response(
+            {"tarefas_invalidas": invalidas},
+            status=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
+    prefs, prefs_usadas = planejamento.montar_preferencias(
+        dados.get("preferencias", {})
+    )
+    agora = dados.get("a_partir_de") or timezone.now()
+    horizonte_fim = min(max(t.deadline for t in validas), agora + JANELA_MAX)
+
+    tarefas = [
+        planejamento.TarefaEntrada(
+            id=str(t.id),
+            titulo=t.titulo,
+            classe_id=str(t.classe_id),
+            esforco=t.esforco_estimado,
+            deadline=t.deadline,
+        )
+        for t in validas
+    ]
+    ocupado = planejamento.intervalos_ocupados(agora, horizonte_fim)
+    sessoes, nao_alocado = planejamento.calcular_plano(
+        tarefas, ocupado, prefs, agora, horizonte_fim
+    )
+
+    return Response(
+        {
+            "sessoes": [
+                {
+                    "tarefa_id": s.tarefa_id,
+                    "tarefa_titulo": s.tarefa_titulo,
+                    "classe_id": s.classe_id,
+                    "inicio": s.inicio.isoformat(),
+                    "fim": s.fim.isoformat(),
+                    "dur_min": s.dur_min,
+                }
+                for s in sessoes
+            ],
+            "nao_alocado": [vars(n) for n in nao_alocado],
+            "preferencias_usadas": prefs_usadas,
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def planejamento_aplicar(request):
+    """POST /planejamento/aplicar → cria os eventos das sessões revisadas.
+
+    Generaliza /tarefas/{id}/planejar para várias tarefas: agrupa por tarefa_id,
+    cria um Evento por sessão (atômico) e marca as tarefas como PROMOVIDA.
+    """
+    entrada = AplicarSerializer(data=request.data)
+    entrada.is_valid(raise_exception=True)
+    sessoes = entrada.validated_data["sessoes"]
+
+    ids = {s["tarefa_id"] for s in sessoes}
+    por_id = {
+        t.id: t for t in Tarefa.objects.select_related("classe").filter(id__in=ids)
+    }
+
+    faltando = [str(tid) for tid in ids if tid not in por_id]
+    if faltando:
+        return Response(
+            {"tarefa_id": [f"Tarefa(s) inexistente(s): {', '.join(faltando)}"]},
+            status=http_status.HTTP_400_BAD_REQUEST,
+        )
+
+    sem_classe = [str(tid) for tid in ids if por_id[tid].classe_id is None]
+    if sem_classe:
+        return Response(
+            {"classe_id": [f"Tarefa(s) sem classe: {', '.join(sem_classe)}"]},
+            status=http_status.HTTP_400_BAD_REQUEST,
+        )
+
+    with transaction.atomic():
+        criados = [
+            Evento.objects.create(
+                titulo=por_id[s["tarefa_id"]].titulo,
+                descricao=por_id[s["tarefa_id"]].descricao,
+                inicio=s["inicio"],
+                fim=s["fim"],
+                classe=por_id[s["tarefa_id"]].classe,
+                rastrear_conclusao=True,
+                status=Evento.Status.AGENDADO,
+                origem_tarefa=por_id[s["tarefa_id"]],
+            )
+            for s in sessoes
+        ]
+        for tarefa in por_id.values():
+            if tarefa.status != Tarefa.Status.PROMOVIDA:
+                tarefa.status = Tarefa.Status.PROMOVIDA
+                tarefa.save(update_fields=["status", "atualizado_em"])
+
+    return Response(
+        EventoSerializer(criados, many=True).data,
+        status=http_status.HTTP_201_CREATED,
+    )

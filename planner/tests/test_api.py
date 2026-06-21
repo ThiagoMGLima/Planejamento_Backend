@@ -68,8 +68,10 @@ def test_lista_eventos_data_naive_retorna_400(api):
     assert resp.status_code == 400
 
 
-def test_promover_herda_classe_e_rastreamento(api):
-    classe = ClasseFactory(rastreia_conclusao=True)
+def test_promover_acompanha_conclusao_por_default(api):
+    # Default do produto: todo evento acompanha conclusão, mesmo quando a classe
+    # de origem não rastreia (rastreia_conclusao=False).
+    classe = ClasseFactory(rastreia_conclusao=False)
     tarefa = TarefaFactory(classe=classe, esforco_estimado=90)
     resp = api.post(
         f"/api/v1/tarefas/{tarefa.id}/promover/",
@@ -86,6 +88,52 @@ def test_promover_herda_classe_e_rastreamento(api):
 
     tarefa.refresh_from_db()
     assert tarefa.status == Tarefa.Status.PROMOVIDA
+
+
+def test_planejar_cria_uma_sessao_por_evento(api):
+    classe = ClasseFactory(rastreia_conclusao=False)
+    tarefa = TarefaFactory(classe=classe, esforco_estimado=360)  # 6h de produção
+    resp = api.post(
+        f"/api/v1/tarefas/{tarefa.id}/planejar/",
+        {
+            "sessoes": [
+                {
+                    "inicio": "2026-06-24T19:00:00-03:00",
+                    "fim": "2026-06-24T21:00:00-03:00",
+                },
+                {
+                    "inicio": "2026-06-26T19:00:00-03:00",
+                    "fim": "2026-06-26T21:00:00-03:00",
+                },
+                {
+                    "inicio": "2026-06-28T19:00:00-03:00",
+                    "fim": "2026-06-28T21:00:00-03:00",
+                },
+            ]
+        },
+        format="json",
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert len(body) == 3
+    # Todo evento-sessão acompanha conclusão e aponta para a tarefa de origem.
+    assert all(ev["rastrear_conclusao"] is True for ev in body)
+    assert all(ev["origem_tarefa"] == str(tarefa.id) for ev in body)
+    assert all(ev["classe"]["id"] == str(classe.id) for ev in body)
+
+    tarefa.refresh_from_db()
+    assert tarefa.status == Tarefa.Status.PROMOVIDA
+    assert tarefa.eventos.count() == 3
+
+
+def test_planejar_sem_sessoes_retorna_400(api):
+    tarefa = TarefaFactory(classe=ClasseFactory())
+    resp = api.post(
+        f"/api/v1/tarefas/{tarefa.id}/planejar/",
+        {"sessoes": []},
+        format="json",
+    )
+    assert resp.status_code == 400
 
 
 def test_promover_sem_fim_nem_esforco_usa_uma_hora(api):
@@ -124,3 +172,135 @@ def test_cor_invalida_retorna_400(api):
     )
     assert resp.status_code == 400
     assert "cor" in resp.json()
+
+
+# --- Planejamento multitarefa (calcular / aplicar) --------------------------- #
+
+# Segunda-feira fixa para tornar o cálculo determinístico (independe do relógio).
+A_PARTIR_DE = "2026-06-01T08:00:00-03:00"
+
+
+def test_calcular_retorna_plano_e_preferencias_usadas(api):
+    classe = ClasseFactory()
+    tarefa = TarefaFactory(
+        classe=classe, esforco_estimado=240, deadline=aware(2026, 6, 5, 18)
+    )
+    resp = api.post(
+        "/api/v1/planejamento/calcular",
+        {"tarefa_ids": [str(tarefa.id)], "a_partir_de": A_PARTIR_DE},
+        format="json",
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert sum(s["dur_min"] for s in body["sessoes"]) == 240
+    assert all(s["tarefa_id"] == str(tarefa.id) for s in body["sessoes"])
+    assert all(s["classe_id"] == str(classe.id) for s in body["sessoes"])
+    assert body["nao_alocado"] == []
+    assert body["preferencias_usadas"]["janela_inicio"] == "08:00"
+
+
+def test_calcular_tarefa_sem_deadline_retorna_422(api):
+    valida = TarefaFactory(
+        classe=ClasseFactory(), esforco_estimado=120, deadline=aware(2026, 6, 5, 18)
+    )
+    invalida = TarefaFactory(
+        classe=ClasseFactory(), esforco_estimado=60
+    )  # sem deadline
+    resp = api.post(
+        "/api/v1/planejamento/calcular",
+        {"tarefa_ids": [str(valida.id), str(invalida.id)]},
+        format="json",
+    )
+    assert resp.status_code == 422
+    invalidas = resp.json()["tarefas_invalidas"]
+    assert len(invalidas) == 1
+    assert invalidas[0]["tarefa_id"] == str(invalida.id)
+    assert "deadline" in invalidas[0]["motivo"]
+
+
+def test_calcular_sem_tarefa_ids_retorna_400(api):
+    resp = api.post("/api/v1/planejamento/calcular", {"tarefa_ids": []}, format="json")
+    assert resp.status_code == 400
+
+
+def test_calcular_tarefa_inexistente_retorna_422(api):
+    import uuid
+
+    resp = api.post(
+        "/api/v1/planejamento/calcular",
+        {"tarefa_ids": [str(uuid.uuid4())]},
+        format="json",
+    )
+    assert resp.status_code == 422
+    assert resp.json()["tarefas_invalidas"][0]["motivo"] == "tarefa inexistente"
+
+
+def test_aplicar_cria_eventos_de_varias_tarefas_e_promove(api):
+    classe = ClasseFactory()
+    t1 = TarefaFactory(classe=classe, esforco_estimado=120)
+    t2 = TarefaFactory(classe=classe, esforco_estimado=90)
+    resp = api.post(
+        "/api/v1/planejamento/aplicar",
+        {
+            "sessoes": [
+                {
+                    "tarefa_id": str(t1.id),
+                    "inicio": "2026-06-22T19:00:00-03:00",
+                    "fim": "2026-06-22T21:00:00-03:00",
+                },
+                {
+                    "tarefa_id": str(t2.id),
+                    "inicio": "2026-06-23T19:00:00-03:00",
+                    "fim": "2026-06-23T20:30:00-03:00",
+                },
+            ]
+        },
+        format="json",
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert len(body) == 2
+    assert all(ev["rastrear_conclusao"] is True for ev in body)
+    assert {ev["origem_tarefa"] for ev in body} == {str(t1.id), str(t2.id)}
+
+    t1.refresh_from_db()
+    t2.refresh_from_db()
+    assert t1.status == Tarefa.Status.PROMOVIDA
+    assert t2.status == Tarefa.Status.PROMOVIDA
+
+
+def test_aplicar_tarefa_sem_classe_retorna_400(api):
+    tarefa = TarefaFactory(classe=None, esforco_estimado=60)
+    resp = api.post(
+        "/api/v1/planejamento/aplicar",
+        {
+            "sessoes": [
+                {
+                    "tarefa_id": str(tarefa.id),
+                    "inicio": "2026-06-22T19:00:00-03:00",
+                    "fim": "2026-06-22T20:00:00-03:00",
+                }
+            ]
+        },
+        format="json",
+    )
+    assert resp.status_code == 400
+    assert "classe_id" in resp.json()
+
+
+def test_aplicar_fim_antes_de_inicio_retorna_400(api):
+    tarefa = TarefaFactory(classe=ClasseFactory(), esforco_estimado=60)
+    resp = api.post(
+        "/api/v1/planejamento/aplicar",
+        {
+            "sessoes": [
+                {
+                    "tarefa_id": str(tarefa.id),
+                    "inicio": "2026-06-22T21:00:00-03:00",
+                    "fim": "2026-06-22T19:00:00-03:00",
+                }
+            ]
+        },
+        format="json",
+    )
+    assert resp.status_code == 400

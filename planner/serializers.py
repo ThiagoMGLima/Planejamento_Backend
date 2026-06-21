@@ -133,11 +133,10 @@ class EventoSerializer(serializers.ModelSerializer):
         if inicio is not None and fim is not None and fim <= inicio:
             raise serializers.ValidationError({"fim": "fim deve ser maior que inicio."})
 
-        # Default de rastrear_conclusao herdado da classe no create.
-        classe = attrs.get("classe", getattr(self.instance, "classe", None))
+        # Default: todo evento acompanha conclusão (independe da classe). O
+        # cliente pode enviar rastrear_conclusao=false explicitamente para desligar.
         if "rastrear_conclusao" not in attrs and self.instance is None:
-            if classe is not None:
-                attrs["rastrear_conclusao"] = classe.rastreia_conclusao
+            attrs["rastrear_conclusao"] = True
 
         # Coerção de status (Handoff §4.3): centralizada no servidor.
         rastrear = attrs.get(
@@ -190,3 +189,102 @@ class PromoverSerializer(serializers.Serializer):
         if fim is not None and fim <= inicio:
             raise serializers.ValidationError({"fim": "fim deve ser maior que inicio."})
         return attrs
+
+
+class PlanejarSessaoSerializer(serializers.Serializer):
+    """Uma sessão de produção (intervalo) do planejamento."""
+
+    inicio = serializers.DateTimeField()
+    fim = serializers.DateTimeField()
+
+    def validate(self, attrs):
+        if attrs["fim"] <= attrs["inicio"]:
+            raise serializers.ValidationError({"fim": "fim deve ser maior que inicio."})
+        return attrs
+
+
+class PlanejarSerializer(serializers.Serializer):
+    """Corpo de POST /tarefas/{id}/planejar — divide a produção em N sessões.
+
+    Cada sessão vira um Evento vinculado à tarefa (origem_tarefa). O cliente já
+    envia a divisão final (sugerida pelo app e ajustada pelo usuário).
+    """
+
+    sessoes = PlanejarSessaoSerializer(many=True)
+    classe_id = serializers.PrimaryKeyRelatedField(
+        queryset=Classe.objects.all(), source="classe", required=False
+    )
+
+    def validate_sessoes(self, value):
+        if not value:
+            raise serializers.ValidationError("Informe ao menos uma sessão.")
+        return value
+
+
+HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class PreferenciasSerializer(serializers.Serializer):
+    """Preferências (suaves) do planejamento — todas opcionais, com default."""
+
+    janela_inicio = serializers.RegexField(HHMM, required=False)
+    janela_fim = serializers.RegexField(HHMM, required=False)
+    evitar_fds = serializers.BooleanField(required=False)
+    max_min_por_dia_por_tarefa = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1
+    )
+    max_min_por_dia_total = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1
+    )
+    sessao_min = serializers.IntegerField(required=False, min_value=1)
+    sessao_max = serializers.IntegerField(required=False, min_value=1)
+    granularidade_min = serializers.IntegerField(required=False, min_value=1)
+
+    def validate(self, attrs):
+        from .services.planejamento import DEFAULTS, _hhmm_para_min
+
+        janela_inicio = attrs.get("janela_inicio", DEFAULTS["janela_inicio"])
+        janela_fim = attrs.get("janela_fim", DEFAULTS["janela_fim"])
+        if _hhmm_para_min(janela_inicio) >= _hhmm_para_min(janela_fim):
+            raise serializers.ValidationError(
+                {"janela_fim": "janela_fim deve ser maior que janela_inicio."}
+            )
+        sessao_min = attrs.get("sessao_min", DEFAULTS["sessao_min"])
+        sessao_max = attrs.get("sessao_max", DEFAULTS["sessao_max"])
+        if sessao_min > sessao_max:
+            raise serializers.ValidationError(
+                {"sessao_min": "sessao_min não pode ser maior que sessao_max."}
+            )
+        return attrs
+
+
+class CalcularSerializer(serializers.Serializer):
+    """Corpo de POST /planejamento/calcular — preview do plano (não persiste)."""
+
+    tarefa_ids = serializers.ListField(child=serializers.UUIDField(), allow_empty=False)
+    a_partir_de = serializers.DateTimeField(required=False)
+    preferencias = PreferenciasSerializer(required=False)
+
+
+class AplicarSessaoSerializer(serializers.Serializer):
+    """Uma sessão revisada, já vinculada à tarefa (origem)."""
+
+    tarefa_id = serializers.UUIDField()
+    inicio = serializers.DateTimeField()
+    fim = serializers.DateTimeField()
+
+    def validate(self, attrs):
+        if attrs["fim"] <= attrs["inicio"]:
+            raise serializers.ValidationError({"fim": "fim deve ser maior que inicio."})
+        return attrs
+
+
+class AplicarSerializer(serializers.Serializer):
+    """Corpo de POST /planejamento/aplicar — cria os eventos das sessões."""
+
+    sessoes = AplicarSessaoSerializer(many=True)
+
+    def validate_sessoes(self, value):
+        if not value:
+            raise serializers.ValidationError("Informe ao menos uma sessão.")
+        return value
