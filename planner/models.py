@@ -58,6 +58,11 @@ class Tarefa(TimestampedModel):
     status = models.CharField(
         max_length=10, choices=Status.choices, default=Status.INBOX
     )
+    # Id da origem externa (ex.: página do Notion) que gerou esta tarefa. Garante
+    # idempotência do sync: a mesma origem nunca é importada duas vezes.
+    origem_externa_id = models.CharField(
+        max_length=128, null=True, blank=True, unique=True
+    )
 
     class Meta:
         verbose_name = "Tarefa"

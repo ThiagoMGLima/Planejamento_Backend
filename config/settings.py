@@ -163,3 +163,12 @@ IA_PLANEJAMENTO_ENABLED = env.bool("IA_PLANEJAMENTO_ENABLED", default=True)
 # CPU ~53s) e cresce com o nº de tarefas no escopo, não com o horizonte em si.
 PLANEJAR_TEMPO_BASE_S = env.int("PLANEJAR_TEMPO_BASE_S", default=55)
 PLANEJAR_TEMPO_POR_TAREFA_S = env.int("PLANEJAR_TEMPO_POR_TAREFA_S", default=3)
+
+# --- Integração com Notion (captura no celular → Inbox) ------------------
+# Captura-se a tarefa numa database do Notion (sempre disponível na nuvem) e o
+# backend PUXA (one-way) quando acionado. O backend nunca fica exposto: só chama
+# a API do Notion. Sem token configurado, o sync responde 400 (desligado).
+NOTION_TOKEN = env("NOTION_TOKEN", default="")
+NOTION_DATABASE_ID = env("NOTION_DATABASE_ID", default="")
+# Prazo informado só como data (sem hora) vira deadline neste horário local.
+NOTION_DEADLINE_HORA_PADRAO = env("NOTION_DEADLINE_HORA_PADRAO", default="23:59")

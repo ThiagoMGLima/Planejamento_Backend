@@ -43,5 +43,6 @@ urlpatterns = [
         views.planejamento_aplicar,
         name="planejamento-aplicar",
     ),
+    path("notion/sync", views.notion_sincronizar, name="notion-sync"),
     path("", include(router.urls)),
 ]

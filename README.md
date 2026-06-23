@@ -106,10 +106,21 @@ docker compose exec web python manage.py seed_planejamento --clear    # dataset 
 | GET | `/planejamento/planejar-ia/estimativa` | Tempo estimado da geração, antes de disparar |
 | GET | `/planejamento/planejar-ia/{job_id}` | Estado/resultado do job assíncrono |
 | POST | `/planejamento/aplicar` | Cria os eventos-sessão a partir do plano revisado |
+| POST | `/notion/sync` | Puxa tarefas novas do Notion para a Inbox → `{importadas, ignoradas, erros}` |
 
 Listas de `/classes/` e `/tarefas/` são paginadas por cursor (`{next, previous,
 results}`); `/eventos`, `/pendentes` e `/feriados` retornam arrays. Rotas do
 router exigem **barra no final**.
+
+## Captura no celular (Notion)
+
+Você anota as tarefas numa database do Notion ao longo do dia (app ou um Atalho
+do iOS); ao chegar no PC, o backend **puxa** as novas para a Inbox via
+`POST /notion/sync` (ou `python manage.py sync_notion`) e você roda o planejador.
+Fluxo one-way — o backend só chama o Notion, nunca fica exposto. Idempotente
+(`Tarefa.origem_externa_id`). Configure `NOTION_TOKEN`/`NOTION_DATABASE_ID`; sem
+isso o sync responde 400 (desligado). Setup completo (schema da database +
+integração + receita do Atalho iOS): `docs/tasks/notion-sync.md`.
 
 ## Desenvolvimento e testes
 
@@ -143,3 +154,6 @@ Ver `.env.example`. Principais: `SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`,
 Planejamento por IA: `IA_PLANEJAMENTO_ENABLED` (1/0), `OLLAMA_BASE_URL`,
 `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`. Calibração da estimativa de tempo (opcionais,
 com default): `PLANEJAR_TEMPO_BASE_S`, `PLANEJAR_TEMPO_POR_TAREFA_S`.
+
+Notion (captura no celular): `NOTION_TOKEN`, `NOTION_DATABASE_ID` (vazios =
+desligado), `NOTION_DEADLINE_HORA_PADRAO` (opcional).

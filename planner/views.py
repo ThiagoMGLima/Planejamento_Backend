@@ -32,7 +32,7 @@ from .serializers import (
     PromoverSerializer,
     TarefaSerializer,
 )
-from .services import completion, holidays, planejamento, planejamento_ia
+from .services import completion, holidays, notion_sync, planejamento, planejamento_ia
 from .services.planejamento import HORIZONTES, JANELA_MAX
 from .services.recurrence import expandir
 
@@ -494,3 +494,24 @@ def planejamento_aplicar(request):
         EventoSerializer(criados, many=True).data,
         status=http_status.HTTP_201_CREATED,
     )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def notion_sincronizar(request):
+    """POST /notion/sync → puxa tarefas novas do Notion para a Inbox.
+
+    Síncrono (costuma ser poucas páginas). Devolve o resumo
+    `{importadas, ignoradas, erros}`. 400 se a integração estiver desligada
+    (sem token/database); 503 se o Notion estiver inacessível.
+    """
+    try:
+        resumo = notion_sync.sincronizar()
+    except notion_sync.NotionDesligado as e:
+        return Response({"detail": str(e)}, status=http_status.HTTP_400_BAD_REQUEST)
+    except notion_sync.NotionIndisponivel as e:
+        return Response(
+            {"detail": f"Notion indisponível: {e}"},
+            status=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return Response(resumo)
