@@ -10,6 +10,7 @@ import re
 from rest_framework import serializers
 
 from .models import Classe, Evento, RegraRecorrencia, Tarefa
+from .services.planejamento import HORIZONTES
 
 COR_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -264,6 +265,10 @@ class CalcularSerializer(serializers.Serializer):
     tarefa_ids = serializers.ListField(child=serializers.UUIDField(), allow_empty=False)
     a_partir_de = serializers.DateTimeField(required=False)
     preferencias = PreferenciasSerializer(required=False)
+    # Teto do escopo do plano. AUTOMATICO ⇒ comportamento anterior (deadline-based).
+    horizonte = serializers.ChoiceField(
+        choices=list(HORIZONTES), required=False, default="AUTOMATICO"
+    )
 
 
 class AplicarSessaoSerializer(serializers.Serializer):

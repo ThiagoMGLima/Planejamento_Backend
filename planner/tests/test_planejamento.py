@@ -20,13 +20,14 @@ from .factories import EventoFactory, RegraRecorrenciaFactory, aware
 SEG = aware(2026, 6, 1, 8)
 
 
-def _tarefa(id, esforco, deadline, classe_id="c1", titulo=None):
+def _tarefa(id, esforco, deadline, classe_id="c1", titulo=None, **knobs):
     return P.TarefaEntrada(
         id=id,
         titulo=titulo or f"Tarefa {id}",
         classe_id=classe_id,
         esforco=esforco,
         deadline=deadline,
+        **knobs,  # prioridade / buffer_dias / max_min_por_dia (Fase A)
     )
 
 
@@ -180,6 +181,77 @@ def test_o_que_nao_cabe_vira_nao_alocado_com_restante():
     assert nao[0].minutos_restantes == 5000 - alocado
     assert nao[0].minutos_restantes > 0
     assert nao[0].motivo == "sem espaço livre antes da deadline"
+
+
+# --------------------------------------------------------------------------- #
+# Knobs por tarefa (Fase A): prioridade, buffer_dias, max_min_por_dia          #
+# --------------------------------------------------------------------------- #
+def test_prioridade_desempata_so_em_empate_de_deadline():
+    prefs, _ = P.montar_preferencias({})
+    deadline = SEG + timedelta(days=5)
+    # Mesma deadline: a de maior prioridade pega o slot mais cedo.
+    baixa = _tarefa("BAIXA", 120, deadline, prioridade=1)
+    alta = _tarefa("ALTA", 120, deadline, prioridade=5)
+    sessoes, _ = P.calcular_plano([baixa, alta], [], prefs, SEG, deadline)
+    primeira = min(sessoes, key=lambda s: s.inicio)
+    assert primeira.tarefa_id == "ALTA"
+
+
+def test_prioridade_nao_supera_deadline():
+    prefs, _ = P.montar_preferencias({})
+    # Mesmo com prioridade máxima, a deadline mais curta vem primeiro (EDF manda).
+    cedo = _tarefa("CEDO", 120, SEG + timedelta(days=2), prioridade=1)
+    tarde = _tarefa("TARDE", 120, SEG + timedelta(days=5), prioridade=5)
+    sessoes, _ = P.calcular_plano([tarde, cedo], [], prefs, SEG, tarde.deadline)
+    primeira = min(sessoes, key=lambda s: s.inicio)
+    assert primeira.tarefa_id == "CEDO"
+
+
+def test_buffer_dias_antecipa_o_termino():
+    prefs, _ = P.montar_preferencias({})
+    deadline = SEG + timedelta(days=7)
+    t = _tarefa("A", 240, deadline, buffer_dias=2)
+    sessoes, nao = P.calcular_plano([t], [], prefs, SEG, deadline)
+    assert nao == []
+    limite = deadline - timedelta(days=2)
+    assert all(s.fim <= limite for s in sessoes)
+
+
+def test_buffer_impossivel_usa_a_deadline_real():
+    prefs, _ = P.montar_preferencias({})
+    # buffer jogaria o término pro passado → ignora o buffer, não some a tarefa.
+    deadline = SEG + timedelta(days=1)
+    t = _tarefa("A", 120, deadline, buffer_dias=5)
+    sessoes, nao = P.calcular_plano([t], [], prefs, SEG, deadline)
+    assert _total(sessoes, "A") == 120
+    assert nao == []
+    assert all(s.fim <= deadline for s in sessoes)
+
+
+def test_max_min_por_dia_da_tarefa_limita_abaixo_do_global():
+    prefs, _ = P.montar_preferencias({})  # global 120/dia/tarefa
+    t = _tarefa("A", 300, SEG + timedelta(days=10), max_min_por_dia=60)
+    sessoes, _ = P.calcular_plano([t], [], prefs, SEG, t.deadline)
+    por_dia = {}
+    for s in sessoes:
+        por_dia[s.inicio.date()] = por_dia.get(s.inicio.date(), 0) + s.dur_min
+    assert all(total <= 60 for total in por_dia.values())
+
+
+def test_knobs_preservam_invariantes():
+    prefs, _ = P.montar_preferencias({})
+    t = _tarefa(
+        "A",
+        300,
+        SEG + timedelta(days=10),
+        prioridade=4,
+        buffer_dias=1,
+        max_min_por_dia=90,
+    )
+    sessoes, nao = P.calcular_plano([t], [], prefs, SEG, t.deadline)
+    assert _total(sessoes, "A") == 300
+    assert nao == []
+    assert _sem_sobreposicao(sessoes)
 
 
 # --------------------------------------------------------------------------- #

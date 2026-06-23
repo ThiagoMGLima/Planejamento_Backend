@@ -6,6 +6,9 @@ concluir/remarcar (com escopo), pendentes e feriados.
 
 from datetime import date, timedelta
 
+from celery.result import AsyncResult
+from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import ProtectedError
 from django.utils import timezone
@@ -17,6 +20,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from . import tasks
 from .filters import TarefaFilter
 from .models import Classe, Evento, Tarefa
 from .serializers import (
@@ -28,10 +32,9 @@ from .serializers import (
     PromoverSerializer,
     TarefaSerializer,
 )
-from .services import completion, holidays, planejamento
+from .services import completion, holidays, planejamento, planejamento_ia
+from .services.planejamento import HORIZONTES, JANELA_MAX
 from .services.recurrence import expandir
-
-JANELA_MAX = timedelta(days=92)
 
 
 @api_view(["GET"])
@@ -325,79 +328,116 @@ def planejamento_calcular(request):
     entrada.is_valid(raise_exception=True)
     dados = entrada.validated_data
 
-    ids = list(dict.fromkeys(dados["tarefa_ids"]))  # dedup preservando ordem
-    por_id = {
-        t.id: t for t in Tarefa.objects.select_related("classe").filter(id__in=ids)
-    }
-
-    invalidas = []
-    validas = []
-    for tid in ids:
-        tarefa = por_id.get(tid)
-        if tarefa is None:
-            invalidas.append({"tarefa_id": str(tid), "motivo": "tarefa inexistente"})
-            continue
-        if tarefa.status == Tarefa.Status.PROMOVIDA:
-            invalidas.append({"tarefa_id": str(tid), "motivo": "tarefa já promovida"})
-            continue
-        faltando = []
-        if tarefa.deadline is None:
-            faltando.append("deadline")
-        if not tarefa.esforco_estimado:
-            faltando.append("esforco_estimado")
-        if tarefa.classe_id is None:
-            faltando.append("classe")
-        if faltando:
-            invalidas.append(
-                {"tarefa_id": str(tid), "motivo": f"faltando: {', '.join(faltando)}"}
-            )
-            continue
-        validas.append(tarefa)
-
+    validas, invalidas = planejamento.validar_tarefas(dados["tarefa_ids"])
     if invalidas:
         return Response(
             {"tarefas_invalidas": invalidas},
             status=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
-    prefs, prefs_usadas = planejamento.montar_preferencias(
-        dados.get("preferencias", {})
-    )
     agora = dados.get("a_partir_de") or timezone.now()
-    horizonte_fim = min(max(t.deadline for t in validas), agora + JANELA_MAX)
+    res = planejamento.montar_plano(validas, agora, dados.get("preferencias", {}))
+    return Response(planejamento.serializar_plano(res))
 
-    tarefas = [
-        planejamento.TarefaEntrada(
-            id=str(t.id),
-            titulo=t.titulo,
-            classe_id=str(t.classe_id),
-            esforco=t.esforco_estimado,
-            deadline=t.deadline,
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def planejamento_planejar_ia(request):
+    """POST /planejamento/planejar-ia → plano melhorado pela IA (assíncrono).
+
+    Body igual ao /calcular. Valida 400/422 de forma síncrona; se o resultado já
+    estiver em cache, devolve 200 pronto; senão enfileira a task e devolve 202
+    com o job_id (front faz polling no endpoint de status).
+    """
+    entrada = CalcularSerializer(data=request.data)
+    entrada.is_valid(raise_exception=True)
+    dados = entrada.validated_data
+
+    validas, invalidas = planejamento.validar_tarefas(dados["tarefa_ids"])
+    if invalidas:
+        return Response(
+            {"tarefas_invalidas": invalidas},
+            status=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
-        for t in validas
-    ]
-    ocupado = planejamento.intervalos_ocupados(agora, horizonte_fim)
-    sessoes, nao_alocado = planejamento.calcular_plano(
-        tarefas, ocupado, prefs, agora, horizonte_fim
-    )
 
+    agora = dados.get("a_partir_de") or timezone.now()
+    prefs_entrada = dados.get("preferencias", {})
+    horizonte_dias = HORIZONTES[dados["horizonte"]]
+    base = planejamento.montar_plano(
+        validas, agora, prefs_entrada, horizonte_dias=horizonte_dias
+    )
+    plano_base = planejamento.serializar_plano(base)
+
+    ids = [str(t.id) for t in validas]
+    chave = tasks._chave_cache(
+        ids, plano_base["preferencias_usadas"], plano_base["sessoes"]
+    )
+    hit = cache.get(chave)
+    if hit is not None:
+        return Response({"status": "pronto", "resultado": hit})
+
+    job = tasks.planejar_ia_task.delay(
+        ids, agora.isoformat(), prefs_entrada, horizonte_dias
+    )
     return Response(
         {
-            "sessoes": [
-                {
-                    "tarefa_id": s.tarefa_id,
-                    "tarefa_titulo": s.tarefa_titulo,
-                    "classe_id": s.classe_id,
-                    "inicio": s.inicio.isoformat(),
-                    "fim": s.fim.isoformat(),
-                    "dur_min": s.dur_min,
-                }
-                for s in sessoes
-            ],
-            "nao_alocado": [vars(n) for n in nao_alocado],
-            "preferencias_usadas": prefs_usadas,
+            "job_id": job.id,
+            "status": "processando",
+            "tempo_estimado_s": planejamento_ia.estimar_tempo_s(base),
+        },
+        status=http_status.HTTP_202_ACCEPTED,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def planejamento_estimativa(request):
+    """GET /planejamento/planejar-ia/estimativa → tempo previsto, sem chamar a IA.
+
+    Query: `tarefa_ids` (repetido) e `horizonte` (default AUTOMATICO). Monta só o
+    plano base (solver, barato) para o horizonte escolhido e devolve quantas
+    tarefas entram no escopo + o tempo estimado — para o front avisar a espera
+    antes de o usuário disparar a geração. Tarefas inválidas são ignoradas.
+    """
+    horizonte = request.query_params.get("horizonte", "AUTOMATICO")
+    if horizonte not in HORIZONTES:
+        return Response(
+            {"horizonte": f"valor inválido; use um de {list(HORIZONTES)}."},
+            status=http_status.HTTP_400_BAD_REQUEST,
+        )
+
+    ids = request.query_params.getlist("tarefa_ids")
+    validas, _ = planejamento.validar_tarefas(ids)
+    if not validas:
+        return Response(
+            {
+                "n_tarefas_no_escopo": 0,
+                "tempo_estimado_s": settings.PLANEJAR_TEMPO_BASE_S,
+            }
+        )
+
+    agora = timezone.now()
+    base = planejamento.montar_plano(
+        validas, agora, {}, horizonte_dias=HORIZONTES[horizonte]
+    )
+    return Response(
+        {
+            "n_tarefas_no_escopo": len({s.tarefa_id for s in base.sessoes}),
+            "tempo_estimado_s": planejamento_ia.estimar_tempo_s(base),
         }
     )
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def planejamento_planejar_ia_status(request, job_id):
+    """GET /planejamento/planejar-ia/{job_id} → estado do job (AsyncResult)."""
+    resultado = AsyncResult(str(job_id))
+    if resultado.successful():
+        return Response({"status": "pronto", "resultado": resultado.result})
+    if resultado.failed():
+        return Response({"status": "erro", "detalhe": "falha no processamento"})
+    return Response({"status": "processando"})
 
 
 @api_view(["POST"])

@@ -13,14 +13,28 @@ Decisões (ver docs/tasks/planejamento-producao-multitarefa.md):
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta
 
 from django.utils import timezone
 
-from ..models import Evento
+from ..models import Evento, Tarefa
 from . import holidays
 from .recurrence import expandir
+
+# Horizonte máximo do planejamento (~92 dias). Vive aqui (não na view) porque a
+# orquestração — `montar_plano` — também é usada pela task de IA.
+JANELA_MAX = timedelta(days=92)
+
+# Horizontes que o cliente pode escolher (teto do escopo do plano, em dias).
+# AUTOMATICO (None) ⇒ vai até o deadline mais distante, com teto em JANELA_MAX.
+# Os demais limitam a janela: tarefas que não couberem caem em `nao_alocado`.
+HORIZONTES = {
+    "AUTOMATICO": None,
+    "SEMANA": 7,
+    "DUAS_SEMANAS": 14,
+    "MES": 30,
+}
 
 # Defaults das preferências (handoff §5). Horários como "HH:MM"; minutos como int.
 DEFAULTS = {
@@ -68,13 +82,20 @@ class _PrefsNivel:
 
 @dataclass
 class TarefaEntrada:
-    """Tarefa elegível, já validada pela view (tem deadline/esforço/classe)."""
+    """Tarefa elegível, já validada pela view (tem deadline/esforço/classe).
+
+    Os 3 últimos campos são "knobs" opcionais que a IA pode setar via diretrizes
+    (Fase A). Os defaults preservam exatamente o comportamento do solver puro.
+    """
 
     id: str
     titulo: str
     classe_id: str
     esforco: int  # minutos
     deadline: datetime
+    prioridade: int | None = None  # 1..5 (None ⇒ neutro = 3); desempate do EDF
+    buffer_dias: int = 0  # terminar N dias antes da deadline
+    max_min_por_dia: int | None = None  # teto diário específico desta tarefa
 
 
 @dataclass
@@ -264,6 +285,14 @@ def _subtrair_ocupado(ini, fim, ocupado, granularidade, tz):
 # --------------------------------------------------------------------------- #
 # Núcleo guloso                                                                #
 # --------------------------------------------------------------------------- #
+def _deadline_efetiva(tarefa, agora):
+    """Deadline antecipada pelo buffer; se o buffer a jogar pro passado, ignora."""
+    if not tarefa.buffer_dias:
+        return tarefa.deadline
+    efetiva = tarefa.deadline - timedelta(days=tarefa.buffer_dias)
+    return efetiva if efetiva > agora else tarefa.deadline
+
+
 def calcular_plano(tarefas, ocupado, prefs, agora, horizonte_fim):
     """Aloca sessões para todas as tarefas. Retorna (sessoes, nao_alocado)."""
     sessoes = []
@@ -273,18 +302,21 @@ def calcular_plano(tarefas, ocupado, prefs, agora, horizonte_fim):
     min_total_dia = {}  # date -> minutos já alocados (todas as tarefas)
     tz = timezone.get_current_timezone()
 
-    # EDF: deadline asc; desempate por menor folga e depois maior esforço.
+    # EDF: deadline (efetiva) asc; prioridade desempata (maior primeiro), depois
+    # menor folga e maior esforço. Prazo continua dominando (factibilidade).
     tarefas_ord = sorted(
         tarefas,
         key=lambda t: (
-            t.deadline,
-            (t.deadline - agora) - timedelta(minutes=t.esforco),
+            _deadline_efetiva(t, agora),
+            -(t.prioridade or 3),
+            (_deadline_efetiva(t, agora) - agora) - timedelta(minutes=t.esforco),
             -t.esforco,
         ),
     )
 
     for tarefa in tarefas_ord:
-        if tarefa.deadline <= agora:
+        deadline_efetiva = _deadline_efetiva(tarefa, agora)
+        if deadline_efetiva <= agora:
             nao_alocado.append(
                 NaoAlocado(
                     tarefa.id, tarefa.titulo, tarefa.esforco, "deadline no passado"
@@ -293,7 +325,7 @@ def calcular_plano(tarefas, ocupado, prefs, agora, horizonte_fim):
             continue
 
         restante = tarefa.esforco
-        fim_busca = min(tarefa.deadline, horizonte_fim)
+        fim_busca = min(deadline_efetiva, horizonte_fim)
         for nivel in NIVEIS:
             if restante <= 0:
                 break
@@ -348,8 +380,14 @@ def _alocar(
             continue
 
         limites = [restante, prefs.sessao_max, tamanho]
-        if pn.max_dia_tarefa is not None:
-            limites.append(pn.max_dia_tarefa - min_tarefa_dia.get((tarefa.id, dia), 0))
+        # Teto diário da tarefa: o global (já relaxado por nível) e o override
+        # específico desta tarefa se combinam pelo menor. Override é suave: quando
+        # o relaxamento zera o teto global (nível ≥ 2), o override some junto.
+        cap_tarefa = pn.max_dia_tarefa
+        if cap_tarefa is not None and tarefa.max_min_por_dia is not None:
+            cap_tarefa = min(cap_tarefa, tarefa.max_min_por_dia)
+        if cap_tarefa is not None:
+            limites.append(cap_tarefa - min_tarefa_dia.get((tarefa.id, dia), 0))
         if pn.max_dia_total is not None:
             limites.append(pn.max_dia_total - min_total_dia.get(dia, 0))
         dur = min(limites)
@@ -371,3 +409,136 @@ def _alocar(
         restante -= dur
 
     return restante
+
+
+# --------------------------------------------------------------------------- #
+# Orquestração (reusada por /calcular e pela task de IA)                       #
+# --------------------------------------------------------------------------- #
+@dataclass
+class ResultadoPlano:
+    """Plano calculado + tudo o que a construção do contexto/alertas precisa."""
+
+    sessoes: list
+    nao_alocado: list
+    prefs: Preferencias
+    prefs_usadas: dict
+    tarefas: list  # list[TarefaEntrada] já com as diretrizes aplicadas
+    ocupado: list
+    agora: datetime
+    horizonte_fim: datetime
+
+
+def validar_tarefas(tarefa_ids):
+    """Separa elegíveis de inválidas (mesma regra do /calcular de hoje).
+
+    Inválida = inexistente / já PROMOVIDA / sem deadline|esforço|classe. Aceita
+    ids como UUID ou str (a task recebe strings). Retorna
+    `(validas: list[Tarefa], invalidas: list[{tarefa_id, motivo}])`.
+    """
+    ids = list(dict.fromkeys(str(t) for t in tarefa_ids))  # dedup preservando ordem
+    por_id = {
+        str(t.id): t for t in Tarefa.objects.select_related("classe").filter(id__in=ids)
+    }
+    validas = []
+    invalidas = []
+    for tid in ids:
+        tarefa = por_id.get(tid)
+        if tarefa is None:
+            invalidas.append({"tarefa_id": tid, "motivo": "tarefa inexistente"})
+            continue
+        if tarefa.status == Tarefa.Status.PROMOVIDA:
+            invalidas.append({"tarefa_id": tid, "motivo": "tarefa já promovida"})
+            continue
+        faltando = []
+        if tarefa.deadline is None:
+            faltando.append("deadline")
+        if not tarefa.esforco_estimado:
+            faltando.append("esforco_estimado")
+        if tarefa.classe_id is None:
+            faltando.append("classe")
+        if faltando:
+            invalidas.append(
+                {"tarefa_id": tid, "motivo": f"faltando: {', '.join(faltando)}"}
+            )
+            continue
+        validas.append(tarefa)
+    return validas, invalidas
+
+
+def montar_plano(
+    tarefas_validas, agora, preferencias_entrada, diretrizes=None, horizonte_dias=None
+):
+    """Monta as TarefaEntrada (aplicando `diretrizes`), define o horizonte e roda
+    o solver. `diretrizes` é o dict já validado (ver planejamento_ia); ausente ⇒
+    comportamento idêntico ao plano base. `horizonte_dias` (None ⇒ AUTOMATICO)
+    limita a janela do plano; o que não couber cai em `nao_alocado`. Retorna
+    ResultadoPlano.
+    """
+    prefs, prefs_usadas = montar_preferencias(preferencias_entrada or {})
+    diretrizes = diretrizes or {}
+    prioridades = diretrizes.get("prioridades", {})
+    ajustes = diretrizes.get("ajustes_por_tarefa", {})
+
+    # Teto diário total da IA (suavizar picos): só APERTA — nunca afrouxa o que o
+    # usuário pediu. O relaxamento o remove sozinho (nível ≥ 2) se algo não couber.
+    teto_total_ia = diretrizes.get("max_min_por_dia_total")
+    if teto_total_ia is not None:
+        atual = prefs.max_min_por_dia_total
+        novo = teto_total_ia if atual is None else min(atual, teto_total_ia)
+        prefs = replace(prefs, max_min_por_dia_total=novo)
+        prefs_usadas = {**prefs_usadas, "max_min_por_dia_total": novo}
+
+    tarefas = []
+    for t in tarefas_validas:
+        tid = str(t.id)
+        aj = ajustes.get(tid, {})
+        tarefas.append(
+            TarefaEntrada(
+                id=tid,
+                titulo=t.titulo,
+                classe_id=str(t.classe_id),
+                esforco=t.esforco_estimado,
+                deadline=t.deadline,
+                prioridade=prioridades.get(tid),
+                buffer_dias=aj.get("buffer_dias", 0) or 0,
+                max_min_por_dia=aj.get("max_min_por_dia"),
+            )
+        )
+
+    teto = agora + (timedelta(days=horizonte_dias) if horizonte_dias else JANELA_MAX)
+    horizonte_fim = min(max(_deadline_efetiva(te, agora) for te in tarefas), teto)
+    ocupado = intervalos_ocupados(agora, horizonte_fim)
+    sessoes, nao_alocado = calcular_plano(tarefas, ocupado, prefs, agora, horizonte_fim)
+    return ResultadoPlano(
+        sessoes=sessoes,
+        nao_alocado=nao_alocado,
+        prefs=prefs,
+        prefs_usadas=prefs_usadas,
+        tarefas=tarefas,
+        ocupado=ocupado,
+        agora=agora,
+        horizonte_fim=horizonte_fim,
+    )
+
+
+def serializar_plano(res):
+    """Shape de saída do plano — idêntico ao do /calcular de hoje.
+
+    Compartilhado entre a view /calcular e a task de IA (por isso vive aqui, e
+    não em views: evita import circular).
+    """
+    return {
+        "sessoes": [
+            {
+                "tarefa_id": s.tarefa_id,
+                "tarefa_titulo": s.tarefa_titulo,
+                "classe_id": s.classe_id,
+                "inicio": s.inicio.isoformat(),
+                "fim": s.fim.isoformat(),
+                "dur_min": s.dur_min,
+            }
+            for s in res.sessoes
+        ],
+        "nao_alocado": [vars(n) for n in res.nao_alocado],
+        "preferencias_usadas": res.prefs_usadas,
+    }
