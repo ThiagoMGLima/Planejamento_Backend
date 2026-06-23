@@ -23,6 +23,25 @@ services:
       timeout: 3s
       retries: 10
 
+  # IA local do planejamento (Fase A). CPU primeiro (sem driver); para GPU AMD
+  # depois: image ollama/ollama:rocm + devices [/dev/kfd,/dev/dri] + group_add
+  # [video]. Baixar o modelo uma vez:
+  #   docker compose exec ollama ollama pull qwen2.5:7b-instruct
+  ollama:
+    image: ollama/ollama
+    # Mantém o modelo carregado na RAM indefinidamente (sem cold start entre
+    # chamadas — o load de ~5 GB no CPU é o que estourava o timeout). Single-user
+    # local: ok deixar residente.
+    environment:
+      OLLAMA_KEEP_ALIVE: "-1"
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "ps"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   web:
     build: .
     # --reload: gunicorn reinicia ao mudar o código. Combinado com o volume
@@ -38,6 +57,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Soft: não bloqueia o web se a IA demorar a subir (a IA é opcional).
+      ollama:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 15s
@@ -60,6 +82,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_started
 
 volumes:
   pgdata: {}
+  ollama_models: {}

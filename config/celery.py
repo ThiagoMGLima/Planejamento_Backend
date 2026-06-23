@@ -1,6 +1,8 @@
-"""App Celery (provisionado desde já; sem jobs reais no MVP — Handoff §13).
+"""App Celery do planejador.
 
-O worker sobe no docker-compose, mas nenhuma task é definida na Fase 1.
+O worker sobe no docker-compose e executa `planner.tasks.planejar_ia_task` — o
+job assíncrono do planejamento assistido por IA (Fase A). Tasks são descobertas
+via autodiscover em cada app instalado (planner/tasks.py).
 """
 
 import os
@@ -14,5 +16,5 @@ app = Celery("planejador")
 # Lê config do settings do Django usando o prefixo CELERY_.
 app.config_from_object("django.conf:settings", namespace="CELERY")
 
-# Descobre tasks em cada app instalado (planner/tasks.py, quando existir).
+# Descobre tasks em cada app instalado (planner/tasks.py).
 app.autodiscover_tasks()

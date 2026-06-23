@@ -24,6 +24,21 @@ urlpatterns = [
         name="planejamento-calcular",
     ),
     path(
+        "planejamento/planejar-ia",
+        views.planejamento_planejar_ia,
+        name="planejar-ia",
+    ),
+    path(
+        "planejamento/planejar-ia/estimativa",
+        views.planejamento_estimativa,
+        name="planejar-ia-estimativa",
+    ),
+    path(
+        "planejamento/planejar-ia/<str:job_id>",
+        views.planejamento_planejar_ia_status,
+        name="planejar-ia-status",
+    ),
+    path(
         "planejamento/aplicar",
         views.planejamento_aplicar,
         name="planejamento-aplicar",

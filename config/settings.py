@@ -145,3 +145,21 @@ CELERY_BROKER_URL = REDIS_URL or "redis://redis:6379/0"
 CELERY_RESULT_BACKEND = REDIS_URL or "redis://redis:6379/0"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
+
+# --- Planejamento assistido por IA (Ollama local — Fase A) ---------------
+# IA é opcional: se o Ollama falhar/estiver desligado (ou ENABLED=0), a task
+# entrega o plano base do solver + flag `ia_indisponivel`.
+OLLAMA_BASE_URL = env("OLLAMA_BASE_URL", default="http://ollama:11434")
+OLLAMA_MODEL = env("OLLAMA_MODEL", default="qwen2.5:7b-instruct")
+# 300s: o 7B no CPU é lento para contextos grandes (muitas tarefas → muitas
+# diretrizes geradas). Com o modelo já residente (OLLAMA_KEEP_ALIVE=-1 no compose)
+# não há cold start; este teto cobre a geração de planos grandes. O front espera
+# um pouco mais que isso (ver planejarComIA em api.js).
+OLLAMA_TIMEOUT = env.int("OLLAMA_TIMEOUT", default=300)
+IA_PLANEJAMENTO_ENABLED = env.bool("IA_PLANEJAMENTO_ENABLED", default=True)
+
+# Estimativa de tempo mostrada antes de gerar (endpoint planejar-ia/estimativa).
+# Modelo linear base + por-tarefa: o tempo é dominado pela base (modelo warm no
+# CPU ~53s) e cresce com o nº de tarefas no escopo, não com o horizonte em si.
+PLANEJAR_TEMPO_BASE_S = env.int("PLANEJAR_TEMPO_BASE_S", default=55)
+PLANEJAR_TEMPO_POR_TAREFA_S = env.int("PLANEJAR_TEMPO_POR_TAREFA_S", default=3)
