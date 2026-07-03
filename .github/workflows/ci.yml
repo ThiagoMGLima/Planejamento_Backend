@@ -28,8 +28,12 @@ jobs:
       DATABASE_URL: postgres://planejador:dev@localhost:5432/planejador
       SECRET_KEY: ci-secret-key
       DEBUG: "0"
-      # Sem Redis no CI: cache cai para locmem (ver config/settings.py).
+      # Sem Redis no CI: cache cai para locmem (ver config/settings.py) e o
+      # Celery usa broker/resultado em memória — os testes eager armazenam o
+      # resultado (task_store_eager_result) e não podem depender de redis://.
       REDIS_URL: ""
+      CELERY_BROKER_URL: "memory://"
+      CELERY_RESULT_BACKEND: "cache+memory://"
       DJANGO_SETTINGS_MODULE: config.settings
 
     steps:
