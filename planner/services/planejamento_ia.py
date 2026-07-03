@@ -92,6 +92,7 @@ def construir_contexto(res):
 
     return {
         "agora": agora.isoformat(),
+        "horizonte_fim": res.horizonte_fim.isoformat(),
         "tarefas": tarefas,
         "carga_por_dia": dict(sorted(carga_por_dia.items())),
         "carga_resumo": carga_resumo,

@@ -22,17 +22,25 @@ from rest_framework.response import Response
 
 from . import tasks
 from .filters import TarefaFilter
-from .models import Classe, Evento, Tarefa
+from .models import Classe, EscolhaCenario, Evento, Tarefa
 from .serializers import (
     AplicarSerializer,
     CalcularSerializer,
     ClasseSerializer,
+    EscolherCenarioSerializer,
     EventoSerializer,
     PlanejarSerializer,
     PromoverSerializer,
     TarefaSerializer,
 )
-from .services import completion, holidays, planejamento, planejamento_ia
+from .services import (
+    adaptacao,
+    aplicacao,
+    completion,
+    holidays,
+    planejamento,
+    planejamento_ia,
+)
 from .services.planejamento import HORIZONTES, JANELA_MAX
 from .services.recurrence import expandir
 
@@ -450,47 +458,147 @@ def planejamento_aplicar(request):
     """
     entrada = AplicarSerializer(data=request.data)
     entrada.is_valid(raise_exception=True)
-    sessoes = entrada.validated_data["sessoes"]
 
-    ids = {s["tarefa_id"] for s in sessoes}
-    por_id = {
-        t.id: t for t in Tarefa.objects.select_related("classe").filter(id__in=ids)
-    }
-
-    faltando = [str(tid) for tid in ids if tid not in por_id]
-    if faltando:
-        return Response(
-            {"tarefa_id": [f"Tarefa(s) inexistente(s): {', '.join(faltando)}"]},
-            status=http_status.HTTP_400_BAD_REQUEST,
-        )
-
-    sem_classe = [str(tid) for tid in ids if por_id[tid].classe_id is None]
-    if sem_classe:
-        return Response(
-            {"classe_id": [f"Tarefa(s) sem classe: {', '.join(sem_classe)}"]},
-            status=http_status.HTTP_400_BAD_REQUEST,
-        )
-
-    with transaction.atomic():
-        criados = [
-            Evento.objects.create(
-                titulo=por_id[s["tarefa_id"]].titulo,
-                descricao=por_id[s["tarefa_id"]].descricao,
-                inicio=s["inicio"],
-                fim=s["fim"],
-                classe=por_id[s["tarefa_id"]].classe,
-                rastrear_conclusao=True,
-                status=Evento.Status.AGENDADO,
-                origem_tarefa=por_id[s["tarefa_id"]],
-            )
-            for s in sessoes
-        ]
-        for tarefa in por_id.values():
-            if tarefa.status != Tarefa.Status.PROMOVIDA:
-                tarefa.status = Tarefa.Status.PROMOVIDA
-                tarefa.save(update_fields=["status", "atualizado_em"])
+    try:
+        criados = aplicacao.aplicar_sessoes(entrada.validated_data["sessoes"])
+    except aplicacao.AplicacaoInvalida as e:
+        return Response(e.erros, status=http_status.HTTP_400_BAD_REQUEST)
 
     return Response(
         EventoSerializer(criados, many=True).data,
         status=http_status.HTTP_201_CREATED,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Cenários com trade-offs (Marco C1b)                                          #
+# --------------------------------------------------------------------------- #
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def planejamento_cenarios(request):
+    """POST /planejamento/cenarios → 3–4 cenários comparáveis (assíncrono).
+
+    Body igual ao /planejar-ia. Valida síncrono; cache hit devolve 200 pronto;
+    senão enfileira `gerar_cenarios_task` e devolve 202 com job_id (polling).
+    """
+    entrada = CalcularSerializer(data=request.data)
+    entrada.is_valid(raise_exception=True)
+    dados = entrada.validated_data
+
+    validas, invalidas = planejamento.validar_tarefas(dados["tarefa_ids"])
+    if invalidas:
+        return Response(
+            {"tarefas_invalidas": invalidas},
+            status=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
+    agora = dados.get("a_partir_de") or timezone.now()
+    prefs_entrada = dados.get("preferencias", {})
+    horizonte_dias = HORIZONTES[dados["horizonte"]]
+    base = planejamento.montar_plano(
+        validas, agora, prefs_entrada, horizonte_dias=horizonte_dias
+    )
+    plano_base = planejamento.serializar_plano(base)
+
+    ids = [str(t.id) for t in validas]
+    chave = tasks._chave_cache(
+        ids, plano_base["preferencias_usadas"], plano_base["sessoes"], "cenarios"
+    )
+    hit = cache.get(chave)
+    if hit is not None:
+        return Response({"status": "pronto", "resultado": hit})
+
+    job = tasks.gerar_cenarios_task.delay(
+        ids, agora.isoformat(), prefs_entrada, horizonte_dias
+    )
+    return Response(
+        {
+            "job_id": job.id,
+            "status": "processando",
+            # 1 chamada de IA — mesma ordem de grandeza do planejar-ia.
+            "tempo_estimado_s": planejamento_ia.estimar_tempo_s(base),
+        },
+        status=http_status.HTTP_202_ACCEPTED,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def planejamento_cenarios_status(request, job_id):
+    """GET /planejamento/cenarios/{job_id} → estado do job (AsyncResult)."""
+    hit = cache.get(f"cenarios_job:{job_id}")
+    if hit is not None:
+        return Response({"status": "pronto", "resultado": hit})
+    resultado = AsyncResult(str(job_id))
+    if resultado.successful():
+        return Response({"status": "pronto", "resultado": resultado.result})
+    if resultado.failed():
+        return Response({"status": "erro", "detalhe": "falha no processamento"})
+    return Response({"status": "processando"})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def planejamento_cenarios_escolher(request):
+    """POST /planejamento/cenarios/escolher → grava a escolha e aprende.
+
+    Grava a escolha CRUA (EscolhaCenario, com o lote e os pesos do momento),
+    atualiza os pesos (EWMA) e, com aplicar=true, persiste o plano do cenário
+    reusando o serviço do /aplicar (transação).
+    """
+    entrada = EscolherCenarioSerializer(data=request.data)
+    entrada.is_valid(raise_exception=True)
+    dados = entrada.validated_data
+
+    resultado = cache.get(f"cenarios_job:{dados['job_id']}")
+    if resultado is None:
+        job = AsyncResult(str(dados["job_id"]))
+        resultado = job.result if job.successful() else None
+    if not resultado or "cenarios" not in resultado:
+        return Response(
+            {"job_id": ["Job desconhecido, não finalizado ou expirado."]},
+            status=http_status.HTTP_404_NOT_FOUND,
+        )
+
+    cenario = next(
+        (c for c in resultado["cenarios"] if c["id"] == dados["cenario_id"]), None
+    )
+    if cenario is None:
+        return Response(
+            {"cenario_id": ["Cenário inexistente neste lote."]},
+            status=http_status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        # Tudo-ou-nada: se o aplicar falhar, nem a escolha nem os pesos ficam.
+        with transaction.atomic():
+            escolha = EscolhaCenario.objects.create(
+                lote=[
+                    {
+                        "id": c["id"],
+                        "nome": c["nome"],
+                        "sugerido": c["sugerido"],
+                        "score": c["score"],
+                        "metricas": c["metricas"],
+                        "metricas_vs_base": c["metricas_vs_base"],
+                    }
+                    for c in resultado["cenarios"]
+                ],
+                escolhido=cenario["id"],
+                era_sugerido=cenario["sugerido"],
+                pesos_no_momento=resultado["pesos_usados"],
+            )
+            pesos = adaptacao.atualizar_pesos(escolha)
+
+            corpo = {"aplicado": False, "pesos": pesos}
+            if dados["aplicar"]:
+                criados = aplicacao.aplicar_sessoes(cenario["plano"]["sessoes"])
+                corpo = {
+                    "aplicado": True,
+                    "eventos_criados": len(criados),
+                    "pesos": pesos,
+                }
+    except aplicacao.AplicacaoInvalida as e:
+        return Response(e.erros, status=http_status.HTTP_400_BAD_REQUEST)
+
+    return Response(corpo)

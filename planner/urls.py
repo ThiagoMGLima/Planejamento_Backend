@@ -43,5 +43,20 @@ urlpatterns = [
         views.planejamento_aplicar,
         name="planejamento-aplicar",
     ),
+    path(
+        "planejamento/cenarios",
+        views.planejamento_cenarios,
+        name="cenarios",
+    ),
+    path(
+        "planejamento/cenarios/escolher",
+        views.planejamento_cenarios_escolher,
+        name="cenarios-escolher",
+    ),
+    path(
+        "planejamento/cenarios/<str:job_id>",
+        views.planejamento_cenarios_status,
+        name="cenarios-status",
+    ),
     path("", include(router.urls)),
 ]

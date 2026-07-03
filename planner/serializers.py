@@ -293,3 +293,11 @@ class AplicarSerializer(serializers.Serializer):
         if not value:
             raise serializers.ValidationError("Informe ao menos uma sessão.")
         return value
+
+
+class EscolherCenarioSerializer(serializers.Serializer):
+    """Corpo de POST /planejamento/cenarios/escolher (Marco C1b)."""
+
+    job_id = serializers.CharField()
+    cenario_id = serializers.CharField()
+    aplicar = serializers.BooleanField(required=False, default=False)

@@ -135,6 +135,45 @@ class Evento(TimestampedModel):
         return self.titulo
 
 
+class PesoPreferencia(TimestampedModel):
+    """Peso aprendido de uma métrica de cenário (Marco C1b, §2.4 da visão).
+
+    Aprendido por escolha revelada (EWMA em services/adaptacao.py); 1.0 é o
+    neutro. Ordena e sugere cenários, nunca filtra.
+    """
+
+    metrica = models.CharField(max_length=40, unique=True)
+    valor = models.FloatField(default=1.0)
+
+    class Meta:
+        verbose_name = "Peso de preferência"
+        verbose_name_plural = "Pesos de preferência"
+
+    def __str__(self):
+        return f"{self.metrica}={self.valor:.2f}"
+
+
+class EscolhaCenario(TimestampedModel):
+    """Escolha CRUA de um lote de cenários exibido (Marco C1b).
+
+    Guarda o lote inteiro (com métricas) e qual cenário foi escolhido — permite
+    trocar a regra de aprendizado depois e recalcular os pesos do zero.
+    """
+
+    lote = models.JSONField()  # todos os cenários exibidos + métricas
+    escolhido = models.CharField(max_length=60)  # id do cenário escolhido
+    era_sugerido = models.BooleanField()
+    pesos_no_momento = models.JSONField()  # auditoria/replay
+
+    class Meta:
+        verbose_name = "Escolha de cenário"
+        verbose_name_plural = "Escolhas de cenário"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        return f"{self.escolhido} ({self.criado_em:%Y-%m-%d})"
+
+
 class Ocorrencia(TimestampedModel):
     """Materialização de uma data de um evento recorrente (Handoff §4.5).
 
