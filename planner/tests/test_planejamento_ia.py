@@ -86,6 +86,7 @@ def _tarefa_valida(**kw):
 # --------------------------------------------------------------------------- #
 # construir_contexto                                                           #
 # --------------------------------------------------------------------------- #
+@pytest.mark.django_db  # o contexto lê pesos/fatores adaptativos (C3)
 def test_construir_contexto_fatos_corretos():
     t = P.TarefaEntrada("A", "Prova", "c1", 300, SEG + timedelta(days=10))
     ctx = IA.construir_contexto(_resultado_base([t]))
@@ -99,6 +100,7 @@ def test_construir_contexto_fatos_corretos():
     assert ctx["capacidade_livre_antes_da_deadline"]["A"] > 0
 
 
+@pytest.mark.django_db
 def test_construir_contexto_restante_vem_do_nao_alocado():
     # Esforço gigante p/ horizonte curtíssimo → sobra restante.
     t = P.TarefaEntrada("A", "Big", "c1", 5000, SEG + timedelta(hours=10))
@@ -111,6 +113,7 @@ def test_construir_contexto_restante_vem_do_nao_alocado():
     assert ctx["nao_alocado"][0]["id"] == "A"
 
 
+@pytest.mark.django_db
 def test_construir_contexto_inclui_carga_resumo():
     t = P.TarefaEntrada("A", "Prova", "c1", 300, SEG + timedelta(days=10))
     resumo = IA.construir_contexto(_resultado_base([t]))["carga_resumo"]

@@ -235,7 +235,10 @@ class EventoViewSet(viewsets.ModelViewSet):
     def concluir(self, request, pk=None):
         evento = self.get_object()
         escopo, data = self._parse_escopo(request, evento)
-        resultado = completion.concluir(evento, escopo=escopo, data=data)
+        real_min = self._parse_real_min(request)
+        resultado = completion.concluir(
+            evento, escopo=escopo, data=data, real_min=real_min
+        )
         if escopo == "serie":
             return Response(EventoSerializer(evento).data)
         return Response(
@@ -259,6 +262,20 @@ class EventoViewSet(viewsets.ModelViewSet):
             body["data"] = data.isoformat()
             body["status_override"] = resultado.status_override
         return Response(body)
+
+    @staticmethod
+    def _parse_real_min(request):
+        """`{"real_min": 90}` opcional no concluir (Marco C3) — retrocompatível."""
+        valor = request.data.get("real_min")
+        if valor is None:
+            return None
+        try:
+            valor = int(valor)
+        except (TypeError, ValueError):
+            raise ValidationError({"real_min": "Deve ser um inteiro ≥ 1."})
+        if valor < 1:
+            raise ValidationError({"real_min": "Deve ser um inteiro ≥ 1."})
+        return valor
 
     @staticmethod
     def _parse_escopo(request, evento):

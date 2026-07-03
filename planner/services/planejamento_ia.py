@@ -20,7 +20,7 @@ import ollama
 from django.conf import settings
 from django.utils import timezone
 
-from . import planejamento
+from . import adaptacao, planejamento
 
 
 class OllamaIndisponivel(Exception):
@@ -90,9 +90,19 @@ def construir_contexto(res):
         "carga_media_dia_min": round(sum(cargas) / len(cargas)) if cargas else 0,
     }
 
+    # Fatores adaptativos (C3): a IA propõe conhecendo o comportamento real —
+    # quanto o usuário costuma estourar a estimativa, quais classes são
+    # elásticas (candidatas a mover) e o que ele valoriza nos cenários.
+    classes = {te.classe_id for te in res.tarefas}
+    fatores_classe = {c: adaptacao.fator_classe(c) for c in classes}
+    flexibilidade = {c: adaptacao.flexibilidade_classe(c) for c in classes}
+
     return {
         "agora": agora.isoformat(),
         "horizonte_fim": res.horizonte_fim.isoformat(),
+        "fatores_classe": fatores_classe,
+        "flexibilidade_classe": flexibilidade,
+        "pesos_preferencia": adaptacao.pesos_atuais(),
         "tarefas": tarefas,
         "carga_por_dia": dict(sorted(carga_por_dia.items())),
         "carga_resumo": carga_resumo,

@@ -174,6 +174,50 @@ class EscolhaCenario(TimestampedModel):
         return f"{self.escolhido} ({self.criado_em:%Y-%m-%d})"
 
 
+class RegistroExecucao(TimestampedModel):
+    """Histórico cru de execução (Marco C3) — base dos fatores adaptativos.
+
+    Escrito pelos fluxos `concluir`/`remarcar` de services/completion.py.
+    `real_min` é opcional (o usuário informa se quiser); sem ele o registro
+    ainda vale para o score de flexibilidade (taxa de remarcação).
+    """
+
+    tarefa = models.ForeignKey(
+        Tarefa,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="execucoes",
+    )
+    evento = models.ForeignKey(
+        Evento,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="execucoes",
+    )
+    classe = models.ForeignKey(
+        Classe,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="execucoes",
+    )
+    planejado_min = models.PositiveIntegerField(null=True, blank=True)
+    real_min = models.PositiveIntegerField(null=True, blank=True)
+    remarcado = models.BooleanField(default=False)
+    concluido_em = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Registro de execução"
+        verbose_name_plural = "Registros de execução"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        acao = "remarcado" if self.remarcado else "concluído"
+        return f"{acao} ({self.criado_em:%Y-%m-%d})"
+
+
 class Ocorrencia(TimestampedModel):
     """Materialização de uma data de um evento recorrente (Handoff §4.5).
 

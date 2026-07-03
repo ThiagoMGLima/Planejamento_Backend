@@ -161,6 +161,9 @@ def replanejar(agora=None, dias_bloqueados=None, preferencias=None):
         preferencias,
         diretrizes,
         excluir_evento_ids=[ev.id for ev in substituiveis],
+        # O esforço do pool já vem em minutos de sessão (não é estimativa):
+        # aplicar o fator de classe aqui seria corrigir duas vezes.
+        usar_fatores=False,
     )
 
     anteriores = _res_anterior(res, substituiveis, agora)

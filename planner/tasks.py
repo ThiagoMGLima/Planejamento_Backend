@@ -164,7 +164,9 @@ def gerar_cenarios_task(
             }
         )
 
-    pesos = adaptacao.pesos_atuais()
+    # Decaimento "ao ler" (C3): pesos antigos escorregam 2% rumo ao neutro a
+    # cada lote gerado — gostos mudam com o semestre.
+    pesos = adaptacao.decair_pesos()
     finalistas = cenarios.pontuar(cenarios.filtrar_dominados(lote), pesos)
 
     resultado = {

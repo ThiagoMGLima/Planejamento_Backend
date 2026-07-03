@@ -22,20 +22,11 @@ import ollama
 from django.conf import settings
 from django.utils import timezone
 
+from .adaptacao import METRICAS  # noqa: F401 — dono das métricas: adaptacao
 from .planejamento_ia import OllamaIndisponivel
 
-# Métricas comparáveis entre cenários (§2.3 da visão). Todas por CÓDIGO.
-METRICAS = (
-    "pico_min_dia",
-    "dias_livres",
-    "fds_livres",
-    "folga_media_h",
-    "min_fora_janela",
-    "fragmentacao",
-    "nao_alocado_min",
-)
-# Nas demais (custos), menor = melhor; a normalização inverte o sinal para que
-# "maior = melhor" valha em todas (pesos comparáveis entre si).
+# Nos custos (não-benefício), menor = melhor; a normalização inverte o sinal
+# para que "maior = melhor" valha em todas (pesos comparáveis entre si).
 METRICAS_BENEFICIO = frozenset({"dias_livres", "fds_livres", "folga_media_h"})
 
 # Máximo de cenários exibidos ao usuário (base sempre incluso).
@@ -129,8 +120,14 @@ SYSTEM_PROMPT_CENARIOS = (
     "OU estender a janela); usar_fds (true libera fim de semana); "
     "dias_bloqueados (datas 'YYYY-MM-DD' sem nenhuma sessão). Datas SEMPRE "
     "entre 'agora' e 'horizonte_fim' dos FATOS. Use 'carga_por_dia' para achar "
-    "picos e dias recuperáveis. Nos textos, refira-se às tarefas pelo título, "
-    "nunca pelo id, e não cite nomes técnicos de campos. Responda no schema."
+    "picos e dias recuperáveis. Os FATOS trazem também o comportamento REAL do "
+    "usuário: 'fatores_classe' (razão real/estimado — acima de 1 significa que "
+    "a classe costuma demorar mais que o previsto), 'flexibilidade_classe' "
+    "(0..1, taxa de remarcação — classes flexíveis são as melhores candidatas "
+    "a mover; as rígidas ficam intocadas) e 'pesos_preferencia' (o que ele "
+    "valoriza nas métricas — proponha cenários alinhados a isso). Nos textos, "
+    "refira-se às tarefas pelo título, nunca pelo id, e não cite nomes "
+    "técnicos de campos. Responda no schema."
 )
 
 _SCHEMA_DIRETRIZES = {

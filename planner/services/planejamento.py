@@ -524,14 +524,21 @@ def montar_plano(
     diretrizes=None,
     horizonte_dias=None,
     excluir_evento_ids=None,
+    usar_fatores=True,
 ):
     """Monta as TarefaEntrada (aplicando `diretrizes`), define o horizonte e roda
     o solver. `diretrizes` é o dict já validado (ver planejamento_ia); ausente ⇒
     comportamento idêntico ao plano base. `horizonte_dias` (None ⇒ AUTOMATICO)
     limita a janela do plano; o que não couber cai em `nao_alocado`.
     `excluir_evento_ids` repassa ao `intervalos_ocupados` (replanejar, C2).
+    `usar_fatores` (C3) multiplica o esforço pelo fator de estimativa aprendido
+    da classe (esforco_efetivo = round(esforco × fator)); o echo em
+    `preferencias_usadas.fatores_classe` expõe os aplicados. O replanejar passa
+    False: lá o esforço já vem em minutos de sessão, não em estimativa.
     Retorna ResultadoPlano.
     """
+    from . import adaptacao
+
     prefs, prefs_usadas = montar_preferencias(preferencias_entrada or {})
     diretrizes = diretrizes or {}
     prioridades = diretrizes.get("prioridades", {})
@@ -571,22 +578,34 @@ def montar_plano(
         )
         prefs_usadas = {**prefs_usadas, "dias_bloqueados": sorted(dias_bloqueados)}
 
+    fatores = {}
+    if usar_fatores:
+        for t in tarefas_validas:
+            cid = str(t.classe_id)
+            if cid not in fatores:
+                fatores[cid] = adaptacao.fator_classe(cid)
+
     tarefas = []
     for t in tarefas_validas:
         tid = str(t.id)
         aj = ajustes.get(tid, {})
+        fator = fatores.get(str(t.classe_id), 1.0)
         tarefas.append(
             TarefaEntrada(
                 id=tid,
                 titulo=t.titulo,
                 classe_id=str(t.classe_id),
-                esforco=t.esforco_estimado,
+                esforco=max(1, round(t.esforco_estimado * fator)),
                 deadline=t.deadline,
                 prioridade=prioridades.get(tid),
                 buffer_dias=aj.get("buffer_dias", 0) or 0,
                 max_min_por_dia=aj.get("max_min_por_dia"),
             )
         )
+
+    aplicados = {cid: f for cid, f in fatores.items() if f != 1.0}
+    if aplicados:
+        prefs_usadas = {**prefs_usadas, "fatores_classe": aplicados}
 
     teto = agora + (timedelta(days=horizonte_dias) if horizonte_dias else JANELA_MAX)
     horizonte_fim = min(max(_deadline_efetiva(te, agora) for te in tarefas), teto)
