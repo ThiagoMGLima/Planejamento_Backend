@@ -60,7 +60,7 @@ def planejar_ia_task(tarefa_ids, a_partir_de_iso, preferencias, horizonte_dias=N
         contexto = planejamento_ia.construir_contexto(base)
         bruto = planejamento_ia.gerar_melhoria(contexto)
         diretrizes = planejamento_ia.validar_diretrizes(
-            bruto.get("diretrizes", {}), base.tarefas
+            bruto.get("diretrizes", {}), base.tarefas, base.agora, base.horizonte_fim
         )
         melhor = planejamento.montar_plano(
             validas, agora, preferencias, diretrizes, horizonte_dias=horizonte_dias

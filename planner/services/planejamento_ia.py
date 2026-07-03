@@ -14,6 +14,7 @@ Tudo aqui degrada com segurança: se o Ollama falhar, `gerar_melhoria` levanta
 """
 
 import json
+from datetime import date
 
 import ollama
 from django.conf import settings
@@ -215,7 +216,50 @@ def _como_int(valor):
         return None
 
 
-def validar_diretrizes(bruto, tarefas_validas):
+# Janela mínima/máxima aceitável de um override por dia (C1a): 05:00–23:59.
+_JANELA_DIA_MIN = 5 * 60
+_JANELA_DIA_MAX = 23 * 60 + 59
+
+
+def _hhmm_como_min(valor):
+    """Minutos do dia para "HH:MM" estrito; None se não parsear."""
+    if not isinstance(valor, str):
+        return None
+    partes = valor.split(":")
+    if len(partes) != 2:
+        return None
+    try:
+        horas, minutos = int(partes[0]), int(partes[1])
+    except ValueError:
+        return None
+    if not (0 <= horas <= 23 and 0 <= minutos <= 59):
+        return None
+    return horas * 60 + minutos
+
+
+def _data_no_horizonte(valor, agora, horizonte_fim):
+    """date de uma string ISO dentro de [agora, horizonte_fim]; None se não.
+
+    Sem horizonte (chamadas legadas), só exige data ISO válida.
+    """
+    if not isinstance(valor, str):
+        return None
+    try:
+        d = date.fromisoformat(valor)
+    except ValueError:
+        return None
+    if agora is not None and horizonte_fim is not None:
+        tz = timezone.get_current_timezone()
+        if not (
+            timezone.localtime(agora, tz).date()
+            <= d
+            <= timezone.localtime(horizonte_fim, tz).date()
+        ):
+            return None
+    return d
+
+
+def validar_diretrizes(bruto, tarefas_validas, agora=None, horizonte_fim=None):
     """Limpa as diretrizes da IA contra as tarefas reais (ver §4.3).
 
     - `prioridades[id]`: id existente; inteiro com clamp 1..5.
@@ -223,6 +267,12 @@ def validar_diretrizes(bruto, tarefas_validas):
       (clamp ≤ horizonte) e `max_min_por_dia` int ≥ 1. Campos inválidos somem.
     - `max_min_por_dia_total`: teto diário global (todas as tarefas), int ≥ 1.
       Só entra no retorno quando válido (montar_plano o ignora se ausente).
+    Alavancas de cenário (C1a; `agora`/`horizonte_fim` delimitam as datas):
+    - `janela_por_dia`: chave `"0".."6"` ou data ISO no horizonte; valor
+      `["HH:MM","HH:MM"]` com 05:00 ≤ ini < fim ≤ 23:59; inválido ⇒ descartado.
+    - `usar_fds`: só bool literal; qualquer outra coisa ⇒ descartado.
+    - `dias_bloqueados`: datas ISO no horizonte, dedup, máx. 14 (excedente
+      descartado; a factibilidade fica com o nível 5 do solver).
     Chaves desconhecidas são removidas. Nunca levanta.
     """
     if not isinstance(bruto, dict):
@@ -258,6 +308,48 @@ def validar_diretrizes(bruto, tarefas_validas):
     teto_total = _como_int(bruto.get("max_min_por_dia_total"))
     if teto_total is not None and teto_total >= 1:
         resultado["max_min_por_dia_total"] = teto_total
+
+    janela_por_dia = {}
+    entradas = bruto.get("janela_por_dia")
+    for chave, valor in (entradas if isinstance(entradas, dict) else {}).items():
+        eh_semana = isinstance(chave, str) and chave in {
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+        }
+        if not eh_semana and _data_no_horizonte(chave, agora, horizonte_fim) is None:
+            continue
+        if not isinstance(valor, (list, tuple)) or len(valor) != 2:
+            continue
+        ini, fim = _hhmm_como_min(valor[0]), _hhmm_como_min(valor[1])
+        if ini is None or fim is None:
+            continue
+        if not (_JANELA_DIA_MIN <= ini < fim <= _JANELA_DIA_MAX):
+            continue
+        janela_por_dia[chave] = [valor[0], valor[1]]
+    if janela_por_dia:
+        resultado["janela_por_dia"] = janela_por_dia
+
+    usar_fds = bruto.get("usar_fds")
+    if isinstance(usar_fds, bool):
+        resultado["usar_fds"] = usar_fds
+
+    dias_bloqueados = []
+    entradas = bruto.get("dias_bloqueados")
+    for valor in entradas if isinstance(entradas, (list, tuple)) else []:
+        d = _data_no_horizonte(valor, agora, horizonte_fim)
+        if d is None or d.isoformat() in dias_bloqueados:
+            continue
+        dias_bloqueados.append(d.isoformat())
+        if len(dias_bloqueados) >= 14:
+            break
+    if dias_bloqueados:
+        resultado["dias_bloqueados"] = dias_bloqueados
+
     return resultado
 
 
@@ -285,6 +377,7 @@ def alertas_do_plano(res):
     - cada item em `nao_alocado` → severidade "alto".
     - dia cuja carga ultrapassa o teto total (quando houver) → "medio". O teto
       pode ser estourado quando o relaxamento o zera para caber antes do prazo.
+    - dia bloqueado que recebeu sessão (nível 5 do relaxamento) → "medio".
     """
     alertas = []
     for n in res.nao_alocado:
@@ -318,5 +411,20 @@ def alertas_do_plano(res):
                         ),
                     }
                 )
+
+    if res.prefs.dias_bloqueados:
+        tz = timezone.get_current_timezone()
+        dias_com_sessao = {timezone.localtime(s.inicio, tz).date() for s in res.sessoes}
+        for dia in sorted(dias_com_sessao & set(res.prefs.dias_bloqueados)):
+            alertas.append(
+                {
+                    "tarefa_id": None,
+                    "severidade": "medio",
+                    "mensagem": (
+                        f"Dia {dia.isoformat()} estava bloqueado, mas precisou "
+                        f"ser usado para cumprir os prazos."
+                    ),
+                }
+            )
 
     return alertas

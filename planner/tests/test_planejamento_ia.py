@@ -184,6 +184,61 @@ def test_validar_diretrizes_descarta_teto_total_invalido():
         assert "max_min_por_dia_total" not in IA.validar_diretrizes(bruto, tarefas)
 
 
+# ------------------------- alavancas de cenário (C1a) ----------------------- #
+_TAREFAS = [P.TarefaEntrada("A", "A", "c1", 60, SEG + timedelta(days=5))]
+_HORIZONTE = SEG + timedelta(days=7)
+
+
+def test_validar_janela_por_dia_aceita_semana_e_data_no_horizonte():
+    bruto = {
+        "janela_por_dia": {
+            "3": ["08:00", "20:00"],  # dia da semana
+            "2026-06-04": ["09:00", "19:00"],  # data dentro do horizonte
+        }
+    }
+    limpo = IA.validar_diretrizes(bruto, _TAREFAS, SEG, _HORIZONTE)
+    assert limpo["janela_por_dia"] == {
+        "3": ["08:00", "20:00"],
+        "2026-06-04": ["09:00", "19:00"],
+    }
+
+
+def test_validar_janela_por_dia_descarta_entradas_invalidas():
+    bruto = {
+        "janela_por_dia": {
+            "7": ["08:00", "20:00"],  # dia da semana inexistente
+            "2026-09-01": ["08:00", "20:00"],  # fora do horizonte
+            "0": ["04:00", "20:00"],  # antes de 05:00
+            "1": ["20:00", "08:00"],  # ini ≥ fim
+            "2": ["08:00"],  # shape errado
+            "4": "08:00-20:00",  # não é lista
+        }
+    }
+    limpo = IA.validar_diretrizes(bruto, _TAREFAS, SEG, _HORIZONTE)
+    assert "janela_por_dia" not in limpo
+
+
+def test_validar_usar_fds_so_aceita_bool_literal():
+    assert IA.validar_diretrizes({"usar_fds": True}, _TAREFAS)["usar_fds"] is True
+    assert IA.validar_diretrizes({"usar_fds": False}, _TAREFAS)["usar_fds"] is False
+    for ruim in ("sim", 1, None, [True]):
+        assert "usar_fds" not in IA.validar_diretrizes({"usar_fds": ruim}, _TAREFAS)
+
+
+def test_validar_dias_bloqueados_horizonte_dedup_e_teto():
+    bruto = {
+        "dias_bloqueados": ["2026-06-03", "2026-06-03", "2026-09-01", "x", "2026-06-04"]
+    }
+    limpo = IA.validar_diretrizes(bruto, _TAREFAS, SEG, _HORIZONTE)
+    assert limpo["dias_bloqueados"] == ["2026-06-03", "2026-06-04"]
+    # Máximo 14 datas; excedente descartado.
+    muitos = [(SEG + timedelta(days=d)).date().isoformat() for d in range(20)]
+    limpo = IA.validar_diretrizes(
+        {"dias_bloqueados": muitos}, _TAREFAS, SEG, SEG + timedelta(days=30)
+    )
+    assert len(limpo["dias_bloqueados"]) == 14
+
+
 # --------------------------------------------------------------------------- #
 # gerar_melhoria (Ollama mockado)                                             #
 # --------------------------------------------------------------------------- #
@@ -213,6 +268,22 @@ def test_alertas_do_plano_alto_para_nao_alocado():
     res = _resultado_base([t], horizonte=SEG + timedelta(hours=10))
     alertas = IA.alertas_do_plano(res)
     assert any(a["severidade"] == "alto" and a["tarefa_id"] == "A" for a in alertas)
+
+
+def test_alertas_do_plano_medio_quando_dia_bloqueado_e_usado():
+    from dataclasses import replace
+    from datetime import date
+
+    # Deadline hoje com o dia bloqueado → nível 5 usa o dia mesmo assim.
+    prefs, prefs_usadas = P.montar_preferencias({})
+    prefs = replace(prefs, dias_bloqueados=frozenset({date(2026, 6, 1)}))
+    t = P.TarefaEntrada("A", "A", "c1", 60, aware(2026, 6, 1, 22))
+    sessoes, nao = P.calcular_plano([t], [], prefs, SEG, t.deadline)
+    res = P.ResultadoPlano(sessoes, nao, prefs, prefs_usadas, [t], [], SEG, t.deadline)
+    alertas = IA.alertas_do_plano(res)
+    assert any(
+        a["severidade"] == "medio" and "bloqueado" in a["mensagem"] for a in alertas
+    )
 
 
 # --------------------------------------------------------------------------- #
