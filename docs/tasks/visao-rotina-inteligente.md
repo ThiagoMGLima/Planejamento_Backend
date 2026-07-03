@@ -100,6 +100,44 @@ A narrativa do trade-off ("estendendo quinta até 20h, o sábado fica livre")
 é gerada a partir do **diff de métricas contra o base** — template de código
 primeiro; segunda chamada de IA para polir o texto é opcional e adiável.
 
+### 2.4 Pontuação e pesos adaptativos (preferência por escolha revelada)
+
+O filtro de dominância poda o objetivamente ruim; entre os sobreviventes —
+trade-offs legítimos — quem decide é preferência pessoal. Em vez de perguntar,
+o sistema **aprende observando as escolhas**:
+
+- **Score** = Σ `peso_i × métrica_normalizada_i`. Métricas normalizadas
+  **relativas ao plano base do lote** (unidades diferentes → pesos comparáveis
+  entre si e entre semanas). O cenário de maior score é o **"Sugerido"**
+  (pré-selecionado); os demais continuam visíveis.
+- **Atualização (EWMA)**: a cada escolha, para cada métrica, compara o perfil
+  do cenário escolhido com a média dos rejeitados e move o peso na direção da
+  diferença, com taxa de aprendizado pequena. Upgrade futuro se precisar:
+  atualização par-a-par (Bradley–Terry).
+- **Model `EscolhaCenario`** (gravar a escolha CRUA, não só os pesos): lote
+  exibido com métricas de todos, qual foi escolhido, se era o sugerido. Permite
+  trocar a regra de aprendizado depois e recalcular pesos do zero. Coletar
+  desde a v1 de C1, mesmo antes de o score existir.
+
+Guarda-corpos do aprendizado (as duas armadilhas clássicas):
+
+1. **Bolha de preferência**: o score **ordena e sugere, mas não filtra** — o
+   conjunto exibido mantém diversidade garantida (base sempre presente + ao
+   menos um cenário "contrariante", forte na métrica de menor peso atual).
+   Escolher o contrariante é o sinal de que o gosto mudou; o EWMA corrige.
+2. **Aprender rápido demais / para sempre**: pesos começam neutros; taxa de
+   aprendizado pequena; **piso mínimo** por peso (nenhuma métrica morre); e
+   decaimento lento de volta ao neutro (gostos mudam com o semestre).
+
+v2 (só se os dados pedirem): pesos condicionados a um traço simples do lote
+(ex.: carga total da semana) — semana de prova e semana leve têm gostos
+diferentes; um vetor global fica na média dos dois.
+
+Os pesos aprendidos são código puro, mas também entram como **fatos no
+`construir_contexto`**: a IA que propõe cenários passa a conhecer o gosto do
+usuário ("valoriza fim de semana livre") e propõe candidatos já alinhados —
+o aprendizado melhora a proposição e a ordenação.
+
 ## 3. Marco C2 — Replanejar a partir de agora (emergências)
 
 `POST /planejamento/replanejar`: congela o passado, devolve ao pool o esforço
@@ -123,6 +161,9 @@ Fundação do "ele aprende quanto tempo você leva na academia". Coletar cedo:
 - **Score de flexibilidade por classe**: taxa de remarcação → classes elásticas
   viram amortecedor preferencial do replanejamento (C2) e dos cenários (C1);
   as rígidas (aula, estágio) ficam intocadas.
+- **Pesos de preferência** (§2.4): o `EscolhaCenario` nasce em C1 (coleta);
+  o cálculo/atualização dos pesos consolida-se aqui, junto dos demais fatores
+  adaptativos.
 - Ambos os fatores entram como **fatos no `construir_contexto`** — a IA passa a
   propor cenários sabendo o comportamento real do usuário, sem inventar nada.
 
