@@ -301,3 +301,16 @@ class EscolherCenarioSerializer(serializers.Serializer):
     job_id = serializers.CharField()
     cenario_id = serializers.CharField()
     aplicar = serializers.BooleanField(required=False, default=False)
+
+
+class ReplanejarSerializer(serializers.Serializer):
+    """Corpo de POST /planejamento/replanejar[/aplicar] (Marco C2).
+
+    "Hoje não" = dias_bloqueados=[hoje] — sem endpoint próprio.
+    """
+
+    dias_bloqueados = serializers.ListField(
+        child=serializers.DateField(), required=False
+    )
+    preferencias = PreferenciasSerializer(required=False)
+    a_partir_de = serializers.DateTimeField(required=False)

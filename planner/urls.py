@@ -58,5 +58,15 @@ urlpatterns = [
         views.planejamento_cenarios_status,
         name="cenarios-status",
     ),
+    path(
+        "planejamento/replanejar",
+        views.planejamento_replanejar,
+        name="replanejar",
+    ),
+    path(
+        "planejamento/replanejar/aplicar",
+        views.planejamento_replanejar_aplicar,
+        name="replanejar-aplicar",
+    ),
     path("", include(router.urls)),
 ]

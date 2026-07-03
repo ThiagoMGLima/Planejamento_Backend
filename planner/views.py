@@ -31,6 +31,7 @@ from .serializers import (
     EventoSerializer,
     PlanejarSerializer,
     PromoverSerializer,
+    ReplanejarSerializer,
     TarefaSerializer,
 )
 from .services import (
@@ -40,6 +41,7 @@ from .services import (
     holidays,
     planejamento,
     planejamento_ia,
+    replanejamento,
 )
 from .services.planejamento import HORIZONTES, JANELA_MAX
 from .services.recurrence import expandir
@@ -602,3 +604,65 @@ def planejamento_cenarios_escolher(request):
         return Response(e.erros, status=http_status.HTTP_400_BAD_REQUEST)
 
     return Response(corpo)
+
+
+# --------------------------------------------------------------------------- #
+# Replanejar a partir de agora (Marco C2) — sem IA, síncrono                   #
+# --------------------------------------------------------------------------- #
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def planejamento_replanejar(request):
+    """POST /planejamento/replanejar → plano novo + diff (nada persistido).
+
+    Congela o passado e re-roda o solver do `agora` em diante, devolvendo o
+    esforço das sessões futuras ao pool. "Hoje não" = dias_bloqueados=[hoje].
+    """
+    entrada = ReplanejarSerializer(data=request.data)
+    entrada.is_valid(raise_exception=True)
+    dados = entrada.validated_data
+
+    rp = replanejamento.replanejar(
+        agora=dados.get("a_partir_de") or timezone.now(),
+        dias_bloqueados=dados.get("dias_bloqueados"),
+        preferencias=dados.get("preferencias", {}),
+    )
+    return Response(
+        {
+            "plano": planejamento.serializar_plano(rp.res),
+            "diff": rp.diff,
+            "metricas": rp.metricas,
+            "metricas_vs_anterior": rp.metricas_vs_anterior,
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def planejamento_replanejar_aplicar(request):
+    """POST /planejamento/replanejar/aplicar → recalcula E persiste (transação).
+
+    Recalcular aqui dentro (em vez de confiar num plano enviado pelo cliente)
+    evita aplicar plano obsoleto; o corpo é o mesmo da simulação.
+    """
+    entrada = ReplanejarSerializer(data=request.data)
+    entrada.is_valid(raise_exception=True)
+    dados = entrada.validated_data
+
+    try:
+        rp, criados, removidos = replanejamento.aplicar_replanejamento(
+            agora=dados.get("a_partir_de") or timezone.now(),
+            dias_bloqueados=dados.get("dias_bloqueados"),
+            preferencias=dados.get("preferencias", {}),
+        )
+    except aplicacao.AplicacaoInvalida as e:
+        return Response(e.erros, status=http_status.HTTP_400_BAD_REQUEST)
+
+    return Response(
+        {
+            "diff": rp.diff,
+            "eventos_criados": criados,
+            "eventos_removidos": removidos,
+            "metricas": rp.metricas,
+            "metricas_vs_anterior": rp.metricas_vs_anterior,
+        }
+    )

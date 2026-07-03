@@ -195,17 +195,21 @@ def _prefs_do_nivel(prefs, nivel):
 # --------------------------------------------------------------------------- #
 # Eventos ocupados                                                             #
 # --------------------------------------------------------------------------- #
-def intervalos_ocupados(agora, horizonte_fim):
+def intervalos_ocupados(agora, horizonte_fim, excluir_evento_ids=None):
     """Intervalos [inicio, fim] bloqueados no horizonte, já mesclados.
 
     Cobre eventos simples (query direta) e recorrentes (expandidos sob demanda,
     igual EventoViewSet.list). Ocorrências PULADAS são omitidas por `expandir`.
+    `excluir_evento_ids` tira eventos simples do bloqueio — o replanejar (C2)
+    exclui as sessões que serão substituídas, senão elas se auto-bloqueiam.
     """
     intervalos = []
 
     simples = Evento.objects.filter(
         regra_recorrencia__isnull=True, inicio__lt=horizonte_fim, fim__gt=agora
     ).only("inicio", "fim")
+    if excluir_evento_ids:
+        simples = simples.exclude(id__in=excluir_evento_ids)
     for ev in simples:
         intervalos.append((ev.inicio, ev.fim))
 
@@ -514,13 +518,19 @@ def validar_tarefas(tarefa_ids):
 
 
 def montar_plano(
-    tarefas_validas, agora, preferencias_entrada, diretrizes=None, horizonte_dias=None
+    tarefas_validas,
+    agora,
+    preferencias_entrada,
+    diretrizes=None,
+    horizonte_dias=None,
+    excluir_evento_ids=None,
 ):
     """Monta as TarefaEntrada (aplicando `diretrizes`), define o horizonte e roda
     o solver. `diretrizes` é o dict já validado (ver planejamento_ia); ausente ⇒
     comportamento idêntico ao plano base. `horizonte_dias` (None ⇒ AUTOMATICO)
-    limita a janela do plano; o que não couber cai em `nao_alocado`. Retorna
-    ResultadoPlano.
+    limita a janela do plano; o que não couber cai em `nao_alocado`.
+    `excluir_evento_ids` repassa ao `intervalos_ocupados` (replanejar, C2).
+    Retorna ResultadoPlano.
     """
     prefs, prefs_usadas = montar_preferencias(preferencias_entrada or {})
     diretrizes = diretrizes or {}
@@ -580,7 +590,7 @@ def montar_plano(
 
     teto = agora + (timedelta(days=horizonte_dias) if horizonte_dias else JANELA_MAX)
     horizonte_fim = min(max(_deadline_efetiva(te, agora) for te in tarefas), teto)
-    ocupado = intervalos_ocupados(agora, horizonte_fim)
+    ocupado = intervalos_ocupados(agora, horizonte_fim, excluir_evento_ids)
     sessoes, nao_alocado = calcular_plano(tarefas, ocupado, prefs, agora, horizonte_fim)
     return ResultadoPlano(
         sessoes=sessoes,
