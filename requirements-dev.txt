@@ -5,3 +5,7 @@ pytest-django==4.9.0
 factory-boy==3.3.1
 ruff==0.6.9
 black==24.10.0
+# Testes de contrato do servidor MCP (Marco C4): o server importa o SDK e o
+# respx mocka a camada HTTP (a API não sobe nos testes).
+mcp>=1.9,<2
+respx==0.22.0
