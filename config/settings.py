@@ -185,3 +185,9 @@ ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
 # HTTP que o MCP server embrulha). No worker Celery precisa alcançar o web
 # (no compose: http://web:8000/api/v1).
 API_BASE_URL = env("API_BASE_URL", default="http://localhost:8000/api/v1")
+
+# --- Feriados regionais (Marco C8) ---------------------------------------
+# UF para a camada estadual de feriados (lib `holidays`, offline). Vazio
+# desliga a camada. Municipal é o model FeriadoLocal (admin). Nota: o Paraná
+# não tem feriado estadual oficial — em Curitiba quem age é o municipal.
+FERIADOS_UF = env("FERIADOS_UF", default="")

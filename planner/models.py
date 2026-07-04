@@ -246,3 +246,35 @@ class Ocorrencia(TimestampedModel):
 
     def __str__(self):
         return f"{self.evento.titulo} @ {self.data}"
+
+
+class FeriadoLocal(TimestampedModel):
+    """Feriado municipal/local mantido à mão (Marco C8).
+
+    Não há API confiável para os 5570 municípios; a lista local, editável no
+    admin, é a fonte municipal. `ano` nulo = recorre todo ano (ex.: padroeira);
+    preenchido = pontual (ex.: feriado decretado uma vez).
+    """
+
+    nome = models.CharField(max_length=120)
+    dia = models.PositiveSmallIntegerField()
+    mes = models.PositiveSmallIntegerField()
+    ano = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Feriado local"
+        verbose_name_plural = "Feriados locais"
+        ordering = ["mes", "dia"]
+        constraints = [
+            models.CheckConstraint(
+                check=Q(dia__gte=1, dia__lte=31, mes__gte=1, mes__lte=12),
+                name="ck_feriadolocal_data_valida",
+            ),
+            models.UniqueConstraint(
+                fields=["dia", "mes", "ano"], name="uq_feriadolocal_data"
+            ),
+        ]
+
+    def __str__(self):
+        quando = f"{self.dia:02d}/{self.mes:02d}" + (f"/{self.ano}" if self.ano else "")
+        return f"{self.nome} ({quando})"

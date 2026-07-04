@@ -1,11 +1,21 @@
-"""Testes de services/holidays: cache e degradação graciosa."""
+"""Testes de services/holidays: cache, degradação e camadas regionais (C8).
+
+`feriados_do_ano` agora mescla nacional ∪ estadual ∪ municipal e a camada
+municipal lê o DB — por isso o módulo inteiro é django_db. A seed de Curitiba
+(migration 0006) está presente no banco de teste.
+"""
 
 import datetime
 
 import pytest
 from django.core.cache import cache
 
+from planner.models import FeriadoLocal
 from planner.services import holidays
+
+pytestmark = pytest.mark.django_db
+
+CURITIBA = datetime.date(2026, 9, 8)  # seed: Nossa Senhora da Luz dos Pinhais
 
 
 @pytest.fixture(autouse=True)
@@ -13,6 +23,14 @@ def _cache_limpo():
     cache.clear()
     yield
     cache.clear()
+
+
+@pytest.fixture
+def _sem_rede(monkeypatch):
+    def boom(url, timeout):
+        raise RuntimeError("sem rede")
+
+    monkeypatch.setattr(holidays.requests, "get", boom)
 
 
 class _FakeResp:
@@ -58,12 +76,49 @@ def test_degradacao_usa_cache_stale(monkeypatch):
     monkeypatch.setattr(holidays.requests, "get", boom)
     resultado = holidays.feriados_do_ano(2026)
 
-    assert resultado == {datetime.date(2026, 1, 1)}
+    assert datetime.date(2026, 1, 1) in resultado  # veio da cópia stale
 
 
-def test_degradacao_retorna_vazio_sem_stale(monkeypatch):
-    def boom(url, timeout):
-        raise RuntimeError("sem rede")
+def test_degradacao_nacional_retorna_vazio_sem_stale(_sem_rede):
+    assert holidays._nacionais(2099) == set()
 
-    monkeypatch.setattr(holidays.requests, "get", boom)
-    assert holidays.feriados_do_ano(2099) == set()
+
+# --------------------------------------------------------------------------- #
+# Municipal (FeriadoLocal, Marco C8)                                           #
+# --------------------------------------------------------------------------- #
+def test_seed_curitiba_entra_no_merge(_sem_rede):
+    assert CURITIBA in holidays.feriados_do_ano(2026)
+    # recorre todo ano (ano nulo na seed)
+    assert datetime.date(2031, 9, 8) in holidays.feriados_do_ano(2031)
+
+
+def test_municipal_pontual_so_vale_no_ano(_sem_rede):
+    FeriadoLocal.objects.create(nome="Decretado", dia=2, mes=1, ano=2026)
+    assert datetime.date(2026, 1, 2) in holidays.feriados_do_ano(2026)
+    assert datetime.date(2027, 1, 2) not in holidays.feriados_do_ano(2027)
+
+
+def test_municipal_29_de_fevereiro_pula_ano_nao_bissexto(_sem_rede):
+    FeriadoLocal.objects.create(nome="Bissexto", dia=29, mes=2)
+    assert datetime.date(2028, 2, 29) in holidays.feriados_do_ano(2028)
+    # 2026 não é bissexto: a data não existe — pula sem levantar
+    assert holidays.feriados_do_ano(2026) == {CURITIBA}
+
+
+# --------------------------------------------------------------------------- #
+# Estadual (FERIADOS_UF via lib offline, Marco C8)                             #
+# --------------------------------------------------------------------------- #
+def test_estadual_por_uf(_sem_rede, settings):
+    settings.FERIADOS_UF = "SP"
+    # 9 de julho (Revolução Constitucionalista) é feriado estadual de SP.
+    assert datetime.date(2026, 7, 9) in holidays.feriados_do_ano(2026)
+
+
+def test_estadual_desligado_por_padrao(_sem_rede, settings):
+    settings.FERIADOS_UF = ""
+    assert datetime.date(2026, 7, 9) not in holidays.feriados_do_ano(2026)
+
+
+def test_estadual_uf_invalida_degrada_sem_excecao(_sem_rede, settings):
+    settings.FERIADOS_UF = "XX"
+    assert holidays.feriados_do_ano(2026) == {CURITIBA}
