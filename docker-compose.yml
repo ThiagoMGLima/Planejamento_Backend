@@ -23,17 +23,26 @@ services:
       timeout: 3s
       retries: 10
 
-  # IA local do planejamento (Fase A). CPU primeiro (sem driver); para GPU AMD
-  # depois: image ollama/ollama:rocm + devices [/dev/kfd,/dev/dri] + group_add
-  # [video]. Baixar o modelo uma vez:
+  # IA local do planejamento (Fase A) na GPU (RX 7600 / Navi 33 via ROCm).
+  # Medido: CPU ~7 tok/s de geração → GPU dezenas de tok/s. O host só precisa do
+  # driver amdgpu (kernel); o runtime ROCm vem na imagem. Baixar o modelo uma vez:
   #   docker compose exec ollama ollama pull qwen2.5:7b-instruct
   ollama:
-    image: ollama/ollama
-    # Mantém o modelo carregado na RAM indefinidamente (sem cold start entre
-    # chamadas — o load de ~5 GB no CPU é o que estourava o timeout). Single-user
+    image: ollama/ollama:rocm
+    devices:
+      - /dev/kfd # compute (ROCm/HSA)
+      - /dev/dri # render nodes
+    group_add:
+      - video
+      - "990" # gid do grupo 'render' no HOST (dono de /dev/kfd); nome não resolve na imagem
+    # Mantém o modelo carregado na VRAM indefinidamente (sem cold start entre
+    # chamadas — o reload de ~5 GB era o que estourava o timeout). Single-user
     # local: ok deixar residente.
     environment:
       OLLAMA_KEEP_ALIVE: "-1"
+      # Navi 33 é gfx1102: o ROCm empacotado nem sempre traz kernels para ele —
+      # o override usa os de gfx1100 (mesma família RDNA3), prática padrão.
+      HSA_OVERRIDE_GFX_VERSION: "11.0.0"
     volumes:
       - ollama_models:/root/.ollama
     healthcheck:
