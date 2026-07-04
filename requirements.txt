@@ -13,3 +13,6 @@ gunicorn==22.0.0
 django-environ==0.11.2
 # Cliente oficial do Ollama (planejamento assistido por IA, local — Fase A).
 ollama==0.6.2
+# Cérebro remoto do agente (Marco C4) — OPCIONAL: só quando AGENTE_PROVIDER=anthropic.
+# Import é preguiçoso; deixe comentado se usar só o provider ollama.
+# anthropic==0.40.0

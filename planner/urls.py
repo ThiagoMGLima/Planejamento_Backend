@@ -69,6 +69,17 @@ urlpatterns = [
         views.planejamento_cenarios_status,
         name="cenarios-status",
     ),
+    # Agente conversacional (Marco C4, o cérebro) — 202 + polling.
+    path(
+        "planejamento/agente/chat",
+        views.planejamento_agente_chat,
+        name="agente-chat",
+    ),
+    path(
+        "planejamento/agente/chat/<str:job_id>",
+        views.planejamento_agente_chat_status,
+        name="agente-chat-status",
+    ),
     path(
         "planejamento/replanejar",
         views.planejamento_replanejar,

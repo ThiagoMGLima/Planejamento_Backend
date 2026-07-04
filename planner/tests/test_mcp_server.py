@@ -69,6 +69,59 @@ def test_listar_pendentes():
 
 
 @respx.mock
+def test_listar_tarefas_filtra_e_segue_o_cursor():
+    # Rota do cursor primeiro: o respx casa params por SUBCONJUNTO, e a página 2
+    # também carrega status=INBOX — definida depois, nunca seria alcançada.
+    respx.get(f"{BASE}/tarefas/", params={"cursor": "abc"}).mock(
+        return_value=httpx.Response(200, json={"results": [{"id": "t2"}], "next": None})
+    )
+    respx.get(f"{BASE}/tarefas/", params={"status": "INBOX"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [{"id": "t1"}],
+                "next": f"{BASE}/tarefas/?cursor=abc&status=INBOX",
+            },
+        )
+    )
+    assert _run(server.listar_tarefas(status="INBOX")) == [{"id": "t1"}, {"id": "t2"}]
+
+
+@respx.mock
+def test_consultar_agenda_usa_janela_obrigatoria():
+    rota = respx.get(f"{BASE}/eventos/").mock(
+        return_value=httpx.Response(200, json=[{"id": "e1"}])
+    )
+    out = _run(
+        server.consultar_agenda(
+            "2026-07-06T00:00:00-03:00", "2026-07-12T23:59:00-03:00"
+        )
+    )
+    assert out == [{"id": "e1"}]
+    params = rota.calls.last.request.url.params
+    assert params["inicio"] == "2026-07-06T00:00:00-03:00"
+    assert params["fim"] == "2026-07-12T23:59:00-03:00"
+
+
+@respx.mock
+def test_concluir_ocorrencia_envia_real_min():
+    rota = respx.post(f"{BASE}/eventos/e1/concluir/").mock(
+        return_value=httpx.Response(
+            200,
+            json={"evento": "e1", "data": "2026-07-03", "status_override": "CONCLUIDO"},
+        )
+    )
+    out = _run(
+        server.concluir("e1", escopo="ocorrencia", data="2026-07-03", real_min=90)
+    )
+    assert out["status_override"] == "CONCLUIDO"
+    req = rota.calls.last.request
+    assert req.url.params["escopo"] == "ocorrencia"
+    assert req.url.params["data"] == "2026-07-03"
+    assert json.loads(req.content) == {"real_min": 90}
+
+
+@respx.mock
 def test_simular_plano_nao_persiste_e_repassa_o_plano():
     rota = respx.post(f"{BASE}/planejamento/calcular").mock(
         return_value=httpx.Response(200, json={"sessoes": [], "nao_alocado": []})
@@ -121,6 +174,19 @@ def test_gerar_cenarios_timeout_vira_erro():
     )
     out = _run(server.gerar_cenarios(["t1"]))
     assert out["erro"] == 504
+    assert out["job_id"] == "j1"
+
+
+@respx.mock
+def test_gerar_cenarios_job_sumido_no_polling_nao_espera_o_timeout():
+    respx.post(f"{BASE}/planejamento/cenarios").mock(
+        return_value=httpx.Response(202, json={"job_id": "j1", "status": "processando"})
+    )
+    respx.get(f"{BASE}/planejamento/cenarios/j1").mock(
+        return_value=httpx.Response(404, json={"detail": "Job desconhecido."})
+    )
+    out = _run(server.gerar_cenarios(["t1"]))
+    assert out["erro"] == 404  # devolve o motivo real, não um 504 tardio
     assert out["job_id"] == "j1"
 
 
@@ -212,7 +278,10 @@ def test_tools_registradas_no_servidor():
     esperadas = {
         "criar_tarefa",
         "listar_classes",
+        "listar_tarefas",
         "listar_pendentes",
+        "consultar_agenda",
+        "concluir",
         "simular_plano",
         "gerar_cenarios",
         "refinar_cenario",
