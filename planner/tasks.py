@@ -18,7 +18,14 @@ from django.conf import settings
 from django.core.cache import cache
 from django.utils.dateparse import parse_datetime
 
-from .services import adaptacao, cenarios, planejamento, planejamento_ia, tempos
+from .services import (
+    adaptacao,
+    agente,
+    cenarios,
+    planejamento,
+    planejamento_ia,
+    tempos,
+)
 
 
 def _chave_cache(tarefa_ids, prefs_usadas, sessoes_base, prefixo="planejar_ia"):
@@ -375,3 +382,46 @@ def refinar_cenario_task(self, job_id, cenario_id, mensagem):
     }
     cache.set(f"cenarios_refino:{refino_id}", refino, timeout=3600)
     return refino
+
+
+# --------------------------------------------------------------------------- #
+# Agente conversacional (Marco C4, o cérebro) — tool-use assíncrono           #
+# --------------------------------------------------------------------------- #
+# Turnos reenviados ao modelo por conversa (user+assistant = 2 por turno); só o
+# texto entra na memória — o loop de tool-use de cada turno roda do zero.
+MAX_MENSAGENS_AGENTE = 12
+
+
+@shared_task(bind=True)
+def agente_chat_task(self, conversa_id, mensagem, contexto):
+    """Um turno do assistente de rotina (C4). Roda o loop de tool-use de
+    `agente.conversar` e guarda o resultado no cache (chave por job, como os
+    irmãos). Ollama/API fora ⇒ `ia_indisponivel: true`, conversa intocada.
+    A memória da conversa fica em `agente_conversa:{conversa_id}`.
+    """
+    job_id = self.request.id or "eager"
+    chave_conversa = f"agente_conversa:{conversa_id}"
+    historico = cache.get(chave_conversa) or []
+
+    try:
+        resultado = agente.conversar(mensagem, contexto, historico)
+    except agente.AgenteIndisponivel:
+        saida = {
+            "resposta": "",
+            "acoes": [],
+            "mudou_estado": False,
+            "ia_indisponivel": True,
+        }
+        cache.set(f"agente_chat:{job_id}", saida, timeout=3600)
+        return saida
+
+    historico = (
+        historico
+        + [
+            {"role": "user", "content": mensagem},
+            {"role": "assistant", "content": resultado["resposta"]},
+        ]
+    )[-MAX_MENSAGENS_AGENTE:]
+    cache.set(chave_conversa, historico, timeout=3600)
+    cache.set(f"agente_chat:{job_id}", resultado, timeout=3600)
+    return resultado

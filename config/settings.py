@@ -171,3 +171,17 @@ IA_PLANEJAMENTO_ENABLED = env.bool("IA_PLANEJAMENTO_ENABLED", default=True)
 # CPU ~53s) e cresce com o nº de tarefas no escopo, não com o horizonte em si.
 PLANEJAR_TEMPO_BASE_S = env.int("PLANEJAR_TEMPO_BASE_S", default=55)
 PLANEJAR_TEMPO_POR_TAREFA_S = env.int("PLANEJAR_TEMPO_POR_TAREFA_S", default=3)
+
+# --- Agente conversacional (Marco C4, o "cérebro") ----------------------
+# O framework do modelo é TROCÁVEL (visão §5): `ollama` (local, mesma infra da
+# Fase A; fraco para agência multi-turno) ou `anthropic` (API remota, o que a
+# visão recomenda para tool use multi-turno). Solver, dados e ferramentas
+# permanecem locais em qualquer caso.
+AGENTE_ENABLED = env.bool("AGENTE_ENABLED", default=True)
+AGENTE_PROVIDER = env("AGENTE_PROVIDER", default="ollama")  # ollama | anthropic
+AGENTE_MODEL = env("AGENTE_MODEL", default="claude-opus-4-8")  # usado se anthropic
+ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
+# URL da PRÓPRIA API local: as ferramentas do agente batem nela (mesmos contratos
+# HTTP que o MCP server embrulha). No worker Celery precisa alcançar o web
+# (no compose: http://web:8000/api/v1).
+API_BASE_URL = env("API_BASE_URL", default="http://localhost:8000/api/v1")

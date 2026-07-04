@@ -25,6 +25,7 @@ from . import tasks
 from .filters import TarefaFilter
 from .models import Classe, EscolhaCenario, Evento, Tarefa
 from .serializers import (
+    AgenteChatSerializer,
     AplicarSerializer,
     CalcularSerializer,
     ClasseSerializer,
@@ -708,6 +709,49 @@ def planejamento_cenarios_refinar(request):
 def planejamento_cenarios_refinar_status(request, job_id):
     """GET /planejamento/cenarios/refinar/{job_id} → estado do refino."""
     hit = cache.get(f"cenarios_refino:{job_id}")
+    if hit is not None:
+        return Response({"status": "pronto", "resultado": hit})
+    resultado = AsyncResult(str(job_id))
+    if resultado.successful():
+        return Response({"status": "pronto", "resultado": resultado.result})
+    if resultado.failed():
+        return Response({"status": "erro", "detalhe": "falha no processamento"})
+    return Response({"status": "processando"})
+
+
+# --------------------------------------------------------------------------- #
+# Agente conversacional (Marco C4, o cérebro) — tool-use assíncrono            #
+# --------------------------------------------------------------------------- #
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def planejamento_agente_chat(request):
+    """POST /planejamento/agente/chat → um turno do assistente de rotina.
+
+    Enfileira o loop de tool-use (o LLM decide/executa ferramentas) e devolve
+    202 + job_id para polling — mesmo padrão dos cenários, porque uma volta do
+    modelo leva dezenas de segundos.
+    """
+    entrada = AgenteChatSerializer(data=request.data)
+    entrada.is_valid(raise_exception=True)
+    dados = entrada.validated_data
+    job = tasks.agente_chat_task.delay(
+        dados["conversa_id"], dados["mensagem"], dados.get("contexto") or {}
+    )
+    return Response(
+        {
+            "job_id": job.id,
+            "status": "processando",
+            "tempo_estimado_s": settings.PLANEJAR_TEMPO_BASE_S,
+        },
+        status=http_status.HTTP_202_ACCEPTED,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def planejamento_agente_chat_status(request, job_id):
+    """GET /planejamento/agente/chat/{job_id} → estado do turno."""
+    hit = cache.get(f"agente_chat:{job_id}")
     if hit is not None:
         return Response({"status": "pronto", "resultado": hit})
     resultado = AsyncResult(str(job_id))

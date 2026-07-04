@@ -326,3 +326,16 @@ class ReplanejarSerializer(serializers.Serializer):
     )
     preferencias = PreferenciasSerializer(required=False)
     a_partir_de = serializers.DateTimeField(required=False)
+
+
+class AgenteChatSerializer(serializers.Serializer):
+    """Corpo de POST /planejamento/agente/chat (Marco C4, o cérebro).
+
+    `conversa_id` endereça a memória da conversa (o front gera um por sessão do
+    painel). `contexto` são os FATOS que o agente usa para resolver datas/seleção
+    (data de hoje, view atual, tarefa selecionada) — dict livre, opcional.
+    """
+
+    conversa_id = serializers.CharField(max_length=64)
+    mensagem = serializers.CharField(max_length=2000)
+    contexto = serializers.JSONField(required=False, default=dict)
