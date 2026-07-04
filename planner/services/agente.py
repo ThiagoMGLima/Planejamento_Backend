@@ -74,7 +74,7 @@ def _criar_tarefa(
     if classe_id is not None:
         corpo["classe_id"] = classe_id
     if deadline is not None:
-        corpo["deadline"] = deadline
+        corpo["deadline"] = _normalizar_deadline(deadline)
     if esforco_min is not None:
         corpo["esforco_estimado"] = esforco_min
     resultado = _api("POST", "/tarefas/", corpo=corpo)
@@ -96,23 +96,95 @@ def _criar_tarefa(
 
 
 def _listar_pendentes():
-    return _api("GET", "/pendentes")
+    """Pendentes pré-digeridos (mesma razão da agenda: o modelo copia)."""
+    r = _api("GET", "/pendentes")
+    if not isinstance(r, list):
+        return r
+    digerido = []
+    for ev in r:
+        item = {"evento_id": ev.get("id"), "titulo": ev.get("titulo")}
+        try:
+            venceu = timezone.localtime(datetime.fromisoformat(str(ev["fim"])))
+            item["venceu_em"] = venceu.strftime("%Y-%m-%d %H:%M")
+        except (KeyError, ValueError, TypeError):
+            pass
+        item["classe"] = (ev.get("classe") or {}).get("nome")
+        digerido.append(item)
+    return digerido
+
+
+def _normalizar_deadline(valor):
+    """O usuário fala hora LOCAL; o 7B às vezes escreve a hora literal com Z
+    ("17h" → 17:00Z = 14h local — visto no E2E). Regra do app single-user:
+    naive ou UTC-zero = hora de parede local (o 7B nunca converte fuso de
+    verdade); offset explícito não-zero é respeitado. Não-ISO passa reto."""
+    try:
+        dt = datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return valor
+    if dt.tzinfo is None:
+        return timezone.make_aware(dt).isoformat()
+    if dt.utcoffset() and dt.utcoffset().total_seconds() != 0:
+        return valor
+    return timezone.make_aware(dt.replace(tzinfo=None)).isoformat()
+
+
+def _normalizar_janela(valor, eh_fim=False):
+    """Aceita o que o modelo mandar ("2026-07-06", "...T00:00", com/sem offset)
+    e devolve o tz-aware que a API exige. Data pura como fim = fim do dia.
+    Valor não-ISO passa reto — a API valida e devolve o motivo."""
+    try:
+        dt = datetime.fromisoformat(str(valor))
+    except (ValueError, TypeError):
+        return valor
+    if eh_fim and len(str(valor)) == 10:  # só a data: janela até 23:59
+        dt = dt.replace(hour=23, minute=59)
+    if dt.tzinfo is None:
+        dt = timezone.make_aware(dt)
+    return dt.isoformat()
 
 
 def _consultar_agenda(inicio, fim):
-    r = _api("GET", "/eventos/", params={"inicio": inicio, "fim": fim})
-    # Horários LOCALIZADOS (E2E com o 7B): a API devolve UTC e o modelo lia
-    # "22:00Z" como 22h — Academia das 19h virava "22h" na resposta. Converter
-    # aqui é determinístico; o modelo só copia.
-    if isinstance(r, list):
-        for ev in r:
-            for campo in ("inicio", "fim"):
-                try:
-                    dt = datetime.fromisoformat(str(ev.get(campo)))
-                    ev[campo] = timezone.localtime(dt).isoformat()
-                except (ValueError, TypeError):
-                    continue  # valor inesperado: deixa como veio
-    return r
+    """Agenda PRÉ-DIGERIDA: dias com eventos, horários locais hh:mm, campos
+    mínimos. O payload cru da API (UTC, dezenas de campos) fazia o 7B alucinar
+    o resumo — chamava a ferramenta certa e narrava outra semana. Entregar o
+    resumo pronto reduz a tarefa do modelo a copiar (e corta tokens: mais
+    rápido e mais barato de contexto)."""
+    r = _api(
+        "GET",
+        "/eventos/",
+        params={
+            "inicio": _normalizar_janela(inicio),
+            "fim": _normalizar_janela(fim, eh_fim=True),
+        },
+    )
+    if not isinstance(r, list):
+        return r
+    dias = {}
+    for ev in r:
+        try:
+            ini = timezone.localtime(datetime.fromisoformat(str(ev["inicio"])))
+            fim_ev = timezone.localtime(datetime.fromisoformat(str(ev["fim"])))
+        except (KeyError, ValueError, TypeError):
+            continue  # payload inesperado: melhor omitir que intoxicar o modelo
+        dias.setdefault(ini.date(), []).append(
+            {
+                "evento_id": ev.get("id"),
+                "titulo": ev.get("titulo"),
+                "inicio": ini.strftime("%H:%M"),
+                "fim": fim_ev.strftime("%H:%M"),
+                "classe": (ev.get("classe") or {}).get("nome"),
+                "status": ev.get("status_efetivo") or ev.get("status"),
+            }
+        )
+    return [
+        {
+            "data": d.isoformat(),
+            "dia_da_semana": DIAS_PT[d.weekday()],
+            "eventos": sorted(evs, key=lambda e: e["inicio"]),
+        }
+        for d, evs in sorted(dias.items())
+    ]
 
 
 def _simular_plano(tarefa_ids, preferencias=None, horizonte=None, a_partir_de=None):
@@ -179,8 +251,11 @@ FERRAMENTAS = [
     {
         "nome": "consultar_agenda",
         "descricao": (
-            "Lista os eventos agendados entre `inicio` e `fim` (datas ISO). "
-            "Use para responder 'como está minha semana'."
+            "Agenda entre `inicio` e `fim` (basta YYYY-MM-DD; fuso e fim-do-dia "
+            "são automáticos), JÁ RESUMIDA: lista de dias {data, dia_da_semana, "
+            "eventos[{titulo, inicio, fim, classe}]} com horários LOCAIS hh:mm "
+            "— apenas copie, não recalcule. Dia ausente = sem eventos. Use "
+            "para 'como está minha semana'."
         ),
         "parametros": {
             "type": "object",
@@ -244,9 +319,9 @@ SYSTEM_PROMPT = (
     "números; use as ferramentas e reporte o que elas devolverem. IDS NUNCA são "
     "inventados: id de classe vem de listar_classes (campo id, um UUID) — "
     "chame-a ANTES de criar_tarefa quando o usuário citar uma classe pelo "
-    "nome. DATAS: resolva 'sexta'/'segunda que vem' procurando o "
-    "dia_da_semana na tabela `calendario` dos FATOS e copiando a `data` "
-    "daquela linha — não conte dias de cabeça. Se uma ferramenta devolver "
+    "nome. DATAS: resolva 'sexta'/'segunda que vem' copiando a data da chave "
+    "correspondente em `datas` nos FATOS (ex.: 'próxima segunda-feira') — "
+    "NUNCA conte dias de cabeça. Se uma ferramenta devolver "
     "erro, leia o motivo (e a dica, se houver), corrija os argumentos e tente "
     "de novo antes de desistir. Ao "
     "terminar, responda em uma ou duas frases objetivas, em português, dizendo "
@@ -433,16 +508,18 @@ def conversar(mensagem, contexto, historico=None):
                 {"id": c.get("id"), "nome": c.get("nome")} for c in classes
             ]
     # Data é aritmética, não agência: o 7B erra "segunda que vem" contando nos
-    # dedos. Uma tabelinha dos próximos dias ancora a resolução por cópia.
-    if "calendario" not in fatos:
+    # dedos (e ignorava a tabela genérica de dias). O dicionário usa as MESMAS
+    # palavras que o usuário diria como chave — a resolução vira busca literal.
+    if "datas" not in fatos:
         hoje_local = timezone.localdate()
-        fatos["calendario"] = [
-            {
-                "data": (hoje_local + timedelta(days=i)).isoformat(),
-                "dia_da_semana": DIAS_PT[(hoje_local + timedelta(days=i)).weekday()],
-            }
-            for i in range(8)
-        ]
+        datas = {
+            "hoje": f"{hoje_local.isoformat()} ({DIAS_PT[hoje_local.weekday()]})",
+            "amanhã": (hoje_local + timedelta(days=1)).isoformat(),
+        }
+        for i in range(1, 8):
+            d = hoje_local + timedelta(days=i)
+            datas[f"próxima {DIAS_PT[d.weekday()]}"] = d.isoformat()
+        fatos["datas"] = datas
 
     pedido = (
         "FATOS (use só isto para resolver datas e ids; não invente):\n"
