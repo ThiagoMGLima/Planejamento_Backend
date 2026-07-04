@@ -6,6 +6,8 @@ o fluxo 202→polling→pronto do endpoint e a degradação sem cérebro. Não s
 Ollama nem chama a API de verdade.
 """
 
+import json
+
 import pytest
 from django.core.cache import cache as django_cache
 from rest_framework.test import APIClient
@@ -175,6 +177,113 @@ def test_conversar_erro_de_ferramenta_marca_ok_false(monkeypatch):
     out = agente.conversar("cria X", {})
     assert out["acoes"][0]["ok"] is False
     assert out["mudou_estado"] is False  # erro não recarrega o calendário
+
+
+def test_criar_tarefa_com_classe_invalida_devolve_erro_acionavel(monkeypatch):
+    """E2E com o 7B: o modelo chuta classe_id e desiste do erro cru. O erro
+    precisa voltar com as classes reais + dica para o modelo se corrigir."""
+
+    def fake_api(metodo, caminho, corpo=None, params=None):
+        if caminho == "/tarefas/":
+            return {"erro": 400, "detalhe": {"classe_id": ['Pk inválido "1".']}}
+        if caminho == "/classes/":
+            return {"results": [{"id": "uuid-estudar", "nome": "Estudar"}]}
+        raise AssertionError(f"caminho inesperado: {caminho}")
+
+    monkeypatch.setattr(agente, "_api", fake_api)
+    out = agente._criar_tarefa("X", classe_id="1")
+    assert out["erro"] == 400
+    assert out["classes_disponiveis"] == [{"id": "uuid-estudar", "nome": "Estudar"}]
+    assert "criar_tarefa" in out["dica"]
+
+
+def test_criar_tarefa_erro_sem_classe_id_nao_busca_classes(monkeypatch):
+    """Erro que não é de classe (ex.: deadline inválida) passa reto, sem a
+    chamada extra a /classes/."""
+    chamadas = []
+
+    def fake_api(metodo, caminho, corpo=None, params=None):
+        chamadas.append(caminho)
+        return {"erro": 400, "detalhe": {"deadline": ["Inválida."]}}
+
+    monkeypatch.setattr(agente, "_api", fake_api)
+    out = agente._criar_tarefa("X", deadline="ontem")
+    assert "classes_disponiveis" not in out
+    assert chamadas == ["/tarefas/"]
+
+
+def test_conversar_injeta_classes_nos_fatos(monkeypatch):
+    """Grounding: as classes reais entram nos FATOS do pedido — o 7B copia o
+    id em vez de precisar do salto listar_classes → criar_tarefa (que ele
+    não faz: chuta ids, vimos no E2E)."""
+    monkeypatch.setattr(
+        agente,
+        "_api",
+        lambda *a, **k: {"results": [{"id": "uuid-estudar", "nome": "Estudar"}]},
+    )
+    pedidos = []
+
+    def fake_criar_provider(historico, pedido):
+        pedidos.append(pedido)
+        return FakeProvider([agente._Turno(texto="ok", tool_calls=[])])
+
+    monkeypatch.setattr(agente, "_criar_provider", fake_criar_provider)
+    agente.conversar("oi", {"hoje": "2026-07-04"})
+    assert "uuid-estudar" in pedidos[0]  # classes viraram FATOS
+    assert "hoje" in pedidos[0]  # contexto original preservado
+
+
+def test_conversar_classes_fora_do_ar_segue_sem_elas(monkeypatch):
+    monkeypatch.setattr(agente, "_api", lambda *a, **k: {"erro": "rede"})
+    _instalar_provider(monkeypatch, [agente._Turno(texto="ok", tool_calls=[])])
+    out = agente.conversar("oi", {})  # não levanta
+    assert out["resposta"] == "ok"
+
+
+def test_conversar_injeta_calendario_nos_fatos(monkeypatch):
+    """Data é aritmética: a tabela dos próximos dias ancora "segunda que vem"
+    (no E2E o 7B apontou uma sexta)."""
+    monkeypatch.setattr(agente, "_api", lambda *a, **k: {"erro": "rede"})
+    pedidos = []
+
+    def fake_criar_provider(historico, pedido):
+        pedidos.append(pedido)
+        return FakeProvider([agente._Turno(texto="ok", tool_calls=[])])
+
+    monkeypatch.setattr(agente, "_criar_provider", fake_criar_provider)
+    agente.conversar("o que tenho sexta?", {})
+    fatos = json.loads(pedidos[0].split("\n\nPedido")[0].split(":\n", 1)[1])
+    assert len(fatos["calendario"]) == 8
+    from django.utils import timezone as tz
+
+    hoje = tz.localdate()
+    assert fatos["calendario"][0] == {
+        "data": hoje.isoformat(),
+        "dia_da_semana": agente.DIAS_PT[hoje.weekday()],
+    }
+
+
+def test_consultar_agenda_localiza_horarios(monkeypatch):
+    """A API fala UTC; o modelo lia '22:00Z' como 22h. A ferramenta entrega
+    horário local — o modelo só copia."""
+
+    def fake_api(metodo, caminho, corpo=None, params=None):
+        return [
+            {
+                "id": "e1",
+                "inicio": "2026-07-06T22:00:00Z",
+                "fim": "2026-07-06T23:30:00Z",
+            },
+            {"id": "e2", "inicio": None, "fim": "nada-a-ver"},  # não explode
+        ]
+
+    monkeypatch.setattr(agente, "_api", fake_api)
+    out = agente._consultar_agenda(
+        "2026-07-06T00:00:00-03:00", "2026-07-07T00:00:00-03:00"
+    )
+    assert out[0]["inicio"] == "2026-07-06T19:00:00-03:00"  # America/Sao_Paulo
+    assert out[0]["fim"] == "2026-07-06T20:30:00-03:00"
+    assert out[1]["fim"] == "nada-a-ver"  # valor estranho passa reto
 
 
 def test_conversar_desligado_levanta(monkeypatch, settings):

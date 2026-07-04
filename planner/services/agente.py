@@ -19,13 +19,26 @@ resposta honesta com `ia_indisponivel: true`.
 
 import json
 from collections import namedtuple
+from datetime import datetime, timedelta
 
 import requests
 from django.conf import settings
+from django.utils import timezone
 
 
 class AgenteIndisponivel(Exception):
     """Provider desligado/sem credencial/timeout/resposta não-parseável."""
+
+
+DIAS_PT = [
+    "segunda-feira",
+    "terça-feira",
+    "quarta-feira",
+    "quinta-feira",
+    "sexta-feira",
+    "sábado",
+    "domingo",
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -64,7 +77,22 @@ def _criar_tarefa(
         corpo["deadline"] = deadline
     if esforco_min is not None:
         corpo["esforco_estimado"] = esforco_min
-    return _api("POST", "/tarefas/", corpo=corpo)
+    resultado = _api("POST", "/tarefas/", corpo=corpo)
+    # Erro acionável (E2E com o 7B): quando o modelo chuta um classe_id que não
+    # existe, devolver as classes reais junto do erro permite que ele corrija a
+    # chamada no turno seguinte, em vez de desistir com "problema técnico".
+    if (
+        isinstance(resultado, dict)
+        and "erro" in resultado
+        and isinstance(resultado.get("detalhe"), dict)
+        and "classe_id" in resultado["detalhe"]
+    ):
+        resultado["classes_disponiveis"] = _listar_classes()
+        resultado["dica"] = (
+            "classe_id deve ser um id (UUID) de classes_disponiveis; "
+            "repita criar_tarefa com o id correto."
+        )
+    return resultado
 
 
 def _listar_pendentes():
@@ -72,7 +100,19 @@ def _listar_pendentes():
 
 
 def _consultar_agenda(inicio, fim):
-    return _api("GET", "/eventos/", params={"inicio": inicio, "fim": fim})
+    r = _api("GET", "/eventos/", params={"inicio": inicio, "fim": fim})
+    # Horários LOCALIZADOS (E2E com o 7B): a API devolve UTC e o modelo lia
+    # "22:00Z" como 22h — Academia das 19h virava "22h" na resposta. Converter
+    # aqui é determinístico; o modelo só copia.
+    if isinstance(r, list):
+        for ev in r:
+            for campo in ("inicio", "fim"):
+                try:
+                    dt = datetime.fromisoformat(str(ev.get(campo)))
+                    ev[campo] = timezone.localtime(dt).isoformat()
+                except (ValueError, TypeError):
+                    continue  # valor inesperado: deixa como veio
+    return r
 
 
 def _simular_plano(tarefa_ids, preferencias=None, horizonte=None, a_partir_de=None):
@@ -201,10 +241,17 @@ SYSTEM_PROMPT = (
     "pt-BR). O usuário pede mudanças em linguagem natural; você as executa "
     "chamando as ferramentas (criar tarefa, consultar agenda, replanejar, "
     "simular). O SOLVER é a fonte de verdade — NUNCA invente horários, datas ou "
-    "números; use as ferramentas e reporte o que elas devolverem. Ao terminar, "
-    "responda em uma ou duas frases objetivas, em português, dizendo o que fez "
-    "ou encontrou. Se faltar um dado essencial (ex.: a classe da tarefa), "
-    "pergunte em vez de adivinhar."
+    "números; use as ferramentas e reporte o que elas devolverem. IDS NUNCA são "
+    "inventados: id de classe vem de listar_classes (campo id, um UUID) — "
+    "chame-a ANTES de criar_tarefa quando o usuário citar uma classe pelo "
+    "nome. DATAS: resolva 'sexta'/'segunda que vem' procurando o "
+    "dia_da_semana na tabela `calendario` dos FATOS e copiando a `data` "
+    "daquela linha — não conte dias de cabeça. Se uma ferramenta devolver "
+    "erro, leia o motivo (e a dica, se houver), corrija os argumentos e tente "
+    "de novo antes de desistir. Ao "
+    "terminar, responda em uma ou duas frases objetivas, em português, dizendo "
+    "o que fez ou encontrou. Se faltar um dado essencial (ex.: a classe da "
+    "tarefa), pergunte em vez de adivinhar."
 )
 
 # Teto do loop de tool-use: cobre o encadeamento típico (listar_classes →
@@ -374,9 +421,32 @@ def conversar(mensagem, contexto, historico=None):
     if not settings.AGENTE_ENABLED:
         raise AgenteIndisponivel("agente desligado")
 
+    # Grounding determinístico (E2E com o 7B): modelos pequenos não fazem o
+    # salto de descoberta (listar_classes → criar_tarefa) com confiança — chutam
+    # ids. As classes são poucas e estáveis: entram como FATOS, e o id certo é
+    # questão de copiar, não de agência.
+    fatos = dict(contexto or {})
+    if "classes" not in fatos:
+        classes = _listar_classes()
+        if isinstance(classes, list):  # erro de rede/API ⇒ segue sem, como antes
+            fatos["classes"] = [
+                {"id": c.get("id"), "nome": c.get("nome")} for c in classes
+            ]
+    # Data é aritmética, não agência: o 7B erra "segunda que vem" contando nos
+    # dedos. Uma tabelinha dos próximos dias ancora a resolução por cópia.
+    if "calendario" not in fatos:
+        hoje_local = timezone.localdate()
+        fatos["calendario"] = [
+            {
+                "data": (hoje_local + timedelta(days=i)).isoformat(),
+                "dia_da_semana": DIAS_PT[(hoje_local + timedelta(days=i)).weekday()],
+            }
+            for i in range(8)
+        ]
+
     pedido = (
-        "FATOS (use só isto para resolver datas; não invente):\n"
-        + json.dumps(contexto, ensure_ascii=False)
+        "FATOS (use só isto para resolver datas e ids; não invente):\n"
+        + json.dumps(fatos, ensure_ascii=False)
         + "\n\nPedido do usuário: "
         + mensagem
     )
