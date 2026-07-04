@@ -240,9 +240,10 @@ def test_conversar_classes_fora_do_ar_segue_sem_elas(monkeypatch):
     assert out["resposta"] == "ok"
 
 
-def test_conversar_injeta_calendario_nos_fatos(monkeypatch):
-    """Data é aritmética: a tabela dos próximos dias ancora "segunda que vem"
-    (no E2E o 7B apontou uma sexta)."""
+def test_conversar_injeta_datas_nos_fatos(monkeypatch):
+    """Data é aritmética: o dicionário `datas` usa as palavras do usuário como
+    chave ("próxima segunda-feira") — a resolução vira busca literal (no E2E o
+    7B apontava uma sexta para "segunda que vem")."""
     monkeypatch.setattr(agente, "_api", lambda *a, **k: {"erro": "rede"})
     pedidos = []
 
@@ -253,37 +254,132 @@ def test_conversar_injeta_calendario_nos_fatos(monkeypatch):
     monkeypatch.setattr(agente, "_criar_provider", fake_criar_provider)
     agente.conversar("o que tenho sexta?", {})
     fatos = json.loads(pedidos[0].split("\n\nPedido")[0].split(":\n", 1)[1])
-    assert len(fatos["calendario"]) == 8
+    from datetime import timedelta as td
+
     from django.utils import timezone as tz
 
     hoje = tz.localdate()
-    assert fatos["calendario"][0] == {
-        "data": hoje.isoformat(),
-        "dia_da_semana": agente.DIAS_PT[hoje.weekday()],
-    }
+    assert fatos["datas"]["hoje"].startswith(hoje.isoformat())
+    assert fatos["datas"]["amanhã"] == (hoje + td(days=1)).isoformat()
+    # As 7 chaves "próxima <dia>" cobrem uma volta completa da semana.
+    proximas = [k for k in fatos["datas"] if k.startswith("próxima ")]
+    assert len(proximas) == 7
+    prox_seg = next(d for i in range(1, 8) if (d := hoje + td(days=i)).weekday() == 0)
+    assert fatos["datas"]["próxima segunda-feira"] == prox_seg.isoformat()
 
 
-def test_consultar_agenda_localiza_horarios(monkeypatch):
-    """A API fala UTC; o modelo lia '22:00Z' como 22h. A ferramenta entrega
-    horário local — o modelo só copia."""
+def test_consultar_agenda_digere_por_dia_em_horario_local(monkeypatch):
+    """A API fala UTC e o payload cru fazia o 7B alucinar o resumo. A
+    ferramenta entrega dias prontos, horário local hh:mm — o modelo copia."""
 
     def fake_api(metodo, caminho, corpo=None, params=None):
         return [
+            # 22:00Z = 19:00 em America/Sao_Paulo
             {
                 "id": "e1",
+                "titulo": "Academia",
                 "inicio": "2026-07-06T22:00:00Z",
                 "fim": "2026-07-06T23:30:00Z",
+                "classe": {"id": "c1", "nome": "Tarefas básicas"},
+                "status": "AGENDADO",
+                "descricao": "ruído que não deve vazar",
             },
-            {"id": "e2", "inicio": None, "fim": "nada-a-ver"},  # não explode
+            {
+                "id": "e2",
+                "titulo": "Cálculo II",
+                "inicio": "2026-07-06T11:00:00Z",
+                "fim": "2026-07-06T13:00:00Z",
+                "classe": {"id": "c2", "nome": "Aula"},
+                "status_efetivo": "PENDENTE",
+            },
+            {
+                "id": "e3",
+                "titulo": "Inglês",
+                "inicio": "2026-07-11T12:00:00Z",
+                "fim": "2026-07-11T14:00:00Z",
+                "classe": None,
+            },
+            {"id": "e4", "inicio": None, "fim": "nada-a-ver"},  # omitido, sem explodir
         ]
 
     monkeypatch.setattr(agente, "_api", fake_api)
     out = agente._consultar_agenda(
-        "2026-07-06T00:00:00-03:00", "2026-07-07T00:00:00-03:00"
+        "2026-07-06T00:00:00-03:00", "2026-07-12T00:00:00-03:00"
     )
-    assert out[0]["inicio"] == "2026-07-06T19:00:00-03:00"  # America/Sao_Paulo
-    assert out[0]["fim"] == "2026-07-06T20:30:00-03:00"
-    assert out[1]["fim"] == "nada-a-ver"  # valor estranho passa reto
+    assert [d["data"] for d in out] == ["2026-07-06", "2026-07-11"]
+    assert out[0]["dia_da_semana"] == "segunda-feira"
+    seg = out[0]["eventos"]
+    assert [e["titulo"] for e in seg] == ["Cálculo II", "Academia"]  # ordenado
+    assert seg[1]["inicio"] == "19:00" and seg[1]["fim"] == "20:30"  # local
+    assert seg[0]["status"] == "PENDENTE"  # status_efetivo vence o status cru
+    assert "descricao" not in seg[1]  # ruído do payload não vaza
+    assert out[1]["eventos"][0]["classe"] is None  # sem classe não explode
+
+
+def test_criar_tarefa_normaliza_deadline_utc_e_naive(monkeypatch):
+    """ "17h" dito pelo usuário é hora LOCAL; o 7B escreve 17:00Z (=14h local).
+    Naive e UTC-zero viram hora de parede local; offset real é respeitado."""
+    capturado = {}
+
+    def fake_api(metodo, caminho, corpo=None, params=None):
+        capturado.update(corpo)
+        return {"id": "t1"}
+
+    monkeypatch.setattr(agente, "_api", fake_api)
+    agente._criar_tarefa("X", deadline="2026-07-08T17:00:00Z")
+    assert capturado["deadline"] == "2026-07-08T17:00:00-03:00"
+    agente._criar_tarefa("X", deadline="2026-07-08T17:00")
+    assert capturado["deadline"] == "2026-07-08T17:00:00-03:00"
+    agente._criar_tarefa("X", deadline="2026-07-08T17:00:00-03:00")
+    assert capturado["deadline"] == "2026-07-08T17:00:00-03:00"
+    agente._criar_tarefa("X", deadline="amanhã")  # não-ISO: a API valida
+    assert capturado["deadline"] == "amanhã"
+
+
+def test_consultar_agenda_normaliza_janela_naive_e_data_pura(monkeypatch):
+    """O 7B manda '2026-07-06' ou datetime sem offset; a API exige tz-aware.
+    A ferramenta normaliza (data pura como fim vira 23:59) — era 400 no E2E."""
+    capturado = {}
+
+    def fake_api(metodo, caminho, corpo=None, params=None):
+        capturado.update(params)
+        return []
+
+    monkeypatch.setattr(agente, "_api", fake_api)
+    agente._consultar_agenda("2026-07-06", "2026-07-06")
+    assert capturado["inicio"] == "2026-07-06T00:00:00-03:00"
+    assert capturado["fim"] == "2026-07-06T23:59:00-03:00"
+
+    agente._consultar_agenda("2026-07-06T08:00", "2026-07-06T12:00:00-03:00")
+    assert capturado["inicio"] == "2026-07-06T08:00:00-03:00"  # naive → aware
+    assert capturado["fim"] == "2026-07-06T12:00:00-03:00"  # offset preservado
+
+    agente._consultar_agenda("semana que vem", "???")  # não-ISO passa reto
+    assert capturado["inicio"] == "semana que vem"
+
+
+def test_listar_pendentes_digere(monkeypatch):
+    def fake_api(metodo, caminho, corpo=None, params=None):
+        return [
+            {
+                "id": "e1",
+                "titulo": "Revisar Cálculo",
+                "fim": "2026-07-03T19:30:00Z",
+                "classe": {"nome": "Estudar"},
+                "regra_recorrencia": {"ruído": True},
+            }
+        ]
+
+    monkeypatch.setattr(agente, "_api", fake_api)
+    out = agente._listar_pendentes()
+    assert out == [
+        {
+            "evento_id": "e1",
+            "titulo": "Revisar Cálculo",
+            "venceu_em": "2026-07-03 16:30",
+            "classe": "Estudar",
+        }
+    ]
 
 
 def test_conversar_desligado_levanta(monkeypatch, settings):
