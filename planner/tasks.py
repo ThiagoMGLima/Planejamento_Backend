@@ -10,6 +10,7 @@ Importa só de `services` (não de `views`) para evitar import circular.
 
 import hashlib
 import json
+import time
 
 from celery import shared_task
 from celery.result import AsyncResult
@@ -17,7 +18,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.utils.dateparse import parse_datetime
 
-from .services import adaptacao, cenarios, planejamento, planejamento_ia
+from .services import adaptacao, cenarios, planejamento, planejamento_ia, tempos
 
 
 def _chave_cache(tarefa_ids, prefs_usadas, sessoes_base, prefixo="planejar_ia"):
@@ -42,6 +43,7 @@ def _chave_cache(tarefa_ids, prefs_usadas, sessoes_base, prefixo="planejar_ia"):
 @shared_task
 def planejar_ia_task(tarefa_ids, a_partir_de_iso, preferencias, horizonte_dias=None):
     """Pipeline assíncrono. Retorna o dict do contrato (ver docs/tasks)."""
+    inicio = time.monotonic()
     agora = parse_datetime(a_partir_de_iso)
     validas, _ = planejamento.validar_tarefas(tarefa_ids)
     base = planejamento.montar_plano(
@@ -75,6 +77,13 @@ def planejar_ia_task(tarefa_ids, a_partir_de_iso, preferencias, horizonte_dias=N
             "sugestoes": bruto.get("sugestoes", []),
             "ia_indisponivel": False,
         }
+        # Só jobs em que a IA rodou calibram a estimativa (degradação
+        # instantânea afundaria a razão real/prevista).
+        tempos.registrar(
+            "planejar_ia",
+            time.monotonic() - inicio,
+            planejamento_ia.estimar_tempo_s(base),
+        )
     except planejamento_ia.OllamaIndisponivel:
         resultado = {
             "plano": plano_base,
@@ -99,6 +108,7 @@ def gerar_cenarios_task(
     → solver N× (ms cada) → métricas → dominância → score/pesos → top 4 com
     narrativa. Ollama fora ⇒ só os arquétipos + `ia_indisponivel: true`.
     """
+    inicio = time.monotonic()
     agora = parse_datetime(a_partir_de_iso)
     validas, _ = planejamento.validar_tarefas(tarefa_ids)
     base = planejamento.montar_plano(
@@ -170,6 +180,14 @@ def gerar_cenarios_task(
     pesos = adaptacao.decair_pesos()
     finalistas = cenarios.pontuar(cenarios.filtrar_dominados(lote), pesos)
 
+    if not ia_indisponivel:
+        # Calibra a estimativa com a duração real (mesma prevista da view).
+        tempos.registrar(
+            "cenarios",
+            time.monotonic() - inicio,
+            tempos.FATOR_CENARIOS * planejamento_ia.estimar_tempo_s(base),
+        )
+
     resultado = {
         "cenarios": [
             {
@@ -222,6 +240,7 @@ def refinar_cenario_task(self, job_id, cenario_id, mensagem):
     `ia_indisponivel: true`, lote intocado. A conversa do lote fica no cache
     (`cenarios_conversa:{job_id}`) e é reenviada nas chamadas seguintes.
     """
+    inicio = time.monotonic()
     resultado = cache.get(f"cenarios_job:{job_id}")
     if resultado is None:
         job = AsyncResult(str(job_id))
@@ -321,6 +340,11 @@ def refinar_cenario_task(self, job_id, cenario_id, mensagem):
 
     resultado["cenarios"] = [*resultado["cenarios"], novo]
     cache.set(f"cenarios_job:{job_id}", resultado, timeout=3600)
+
+    # Calibra a estimativa com a duração real (mesma prevista da view).
+    tempos.registrar(
+        "refino", time.monotonic() - inicio, planejamento_ia.estimar_tempo_s(base)
+    )
 
     resposta = str(bruto.get("resposta") or "")
     historico = (

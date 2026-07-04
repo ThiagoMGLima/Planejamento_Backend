@@ -44,6 +44,7 @@ from .services import (
     planejamento,
     planejamento_ia,
     replanejamento,
+    tempos,
 )
 from .services.planejamento import HORIZONTES, JANELA_MAX
 from .services.recurrence import expandir
@@ -412,7 +413,9 @@ def planejamento_planejar_ia(request):
         {
             "job_id": job.id,
             "status": "processando",
-            "tempo_estimado_s": planejamento_ia.estimar_tempo_s(base),
+            "tempo_estimado_s": tempos.estimar(
+                "planejar_ia", planejamento_ia.estimar_tempo_s(base)
+            ),
         },
         status=http_status.HTTP_202_ACCEPTED,
     )
@@ -441,7 +444,9 @@ def planejamento_estimativa(request):
         return Response(
             {
                 "n_tarefas_no_escopo": 0,
-                "tempo_estimado_s": settings.PLANEJAR_TEMPO_BASE_S,
+                "tempo_estimado_s": tempos.estimar(
+                    "planejar_ia", settings.PLANEJAR_TEMPO_BASE_S
+                ),
             }
         )
 
@@ -452,7 +457,9 @@ def planejamento_estimativa(request):
     return Response(
         {
             "n_tarefas_no_escopo": len({s.tarefa_id for s in base.sessoes}),
-            "tempo_estimado_s": planejamento_ia.estimar_tempo_s(base),
+            "tempo_estimado_s": tempos.estimar(
+                "planejar_ia", planejamento_ia.estimar_tempo_s(base)
+            ),
         }
     )
 
@@ -540,8 +547,13 @@ def planejamento_cenarios(request):
         {
             "job_id": job.id,
             "status": "processando",
-            # 1 chamada de IA — mesma ordem de grandeza do planejar-ia.
-            "tempo_estimado_s": planejamento_ia.estimar_tempo_s(base),
+            # A saída tem 3–6 cenários (muito mais tokens que o planejar-ia):
+            # semente = FATOR_CENARIOS × fórmula; depois a razão aprendida
+            # com as durações reais assume (ver services/tempos.py).
+            "tempo_estimado_s": tempos.estimar(
+                "cenarios",
+                tempos.FATOR_CENARIOS * planejamento_ia.estimar_tempo_s(base),
+            ),
         },
         status=http_status.HTTP_202_ACCEPTED,
     )
@@ -681,8 +693,11 @@ def planejamento_cenarios_refinar(request):
         {
             "job_id": job.id,
             "status": "processando",
-            "tempo_estimado_s": settings.PLANEJAR_TEMPO_BASE_S
-            + settings.PLANEJAR_TEMPO_POR_TAREFA_S * n,
+            "tempo_estimado_s": tempos.estimar(
+                "refino",
+                settings.PLANEJAR_TEMPO_BASE_S
+                + settings.PLANEJAR_TEMPO_POR_TAREFA_S * n,
+            ),
         },
         status=http_status.HTTP_202_ACCEPTED,
     )
