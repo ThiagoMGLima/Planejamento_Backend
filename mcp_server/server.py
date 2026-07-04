@@ -24,9 +24,12 @@ mcp = FastMCP(
     port=int(os.environ.get("MCP_PORT", "8765")),
     instructions=(
         "Ferramentas do Planejador de Rotina (backend local). O solver é a "
-        "fonte de verdade: todo plano exibido vem dele. `simular_plano` e "
-        "`replanejar` (sem aplicar) são what-if — nada é persistido; "
-        "`escolher_cenario` e `replanejar(aplicar=true)` persistem."
+        "fonte de verdade: todo plano exibido vem dele. Fluxo típico: "
+        "`listar_tarefas(status=INBOX)` descobre os ids → `simular_plano`/"
+        "`gerar_cenarios` planejam; `consultar_agenda` lê o calendário. "
+        "`simular_plano` e `replanejar` (sem aplicar) são what-if — nada é "
+        "persistido; `escolher_cenario` e `replanejar(aplicar=true)` "
+        "persistem. `concluir` com real_min alimenta os fatores adaptativos."
     ),
 )
 
@@ -75,9 +78,60 @@ async def listar_classes() -> list | dict:
     return resultado
 
 
+async def listar_tarefas(
+    status: str | None = None, classe_id: str | None = None
+) -> list | dict:
+    """Lista as tarefas (id, titulo, deadline, esforco_estimado, classe) —
+    use os ids em simular_plano/gerar_cenarios. status: INBOX (padrão útil:
+    o que ainda não virou evento) | PROMOVIDA. Desembrulha a paginação."""
+    params = {}
+    if status is not None:
+        params["status"] = status
+    if classe_id is not None:
+        params["classe"] = classe_id
+    resultado = await _api("GET", "/tarefas/", params=params)
+    if not (isinstance(resultado, dict) and "results" in resultado):
+        return resultado
+    itens = list(resultado["results"])
+    # Segue o cursor (single-user local: poucas páginas; teto por segurança).
+    paginas = 0
+    while resultado.get("next") and paginas < 20:
+        resultado = await _api("GET", resultado["next"])
+        if not (isinstance(resultado, dict) and "results" in resultado):
+            return resultado  # erro no meio do cursor: o agente lê o motivo
+        itens.extend(resultado["results"])
+        paginas += 1
+    return itens
+
+
 async def listar_pendentes() -> list | dict:
     """Eventos rastreáveis já vencidos e não concluídos (status PENDENTE)."""
     return await _api("GET", "/pendentes")
+
+
+async def consultar_agenda(inicio: str, fim: str) -> list | dict:
+    """Eventos agendados entre `inicio` e `fim` (ISO-8601 COM offset; janela
+    máxima ~92 dias), com recorrências expandidas e status efetivo — use para
+    responder "como está minha semana"."""
+    return await _api("GET", "/eventos/", params={"inicio": inicio, "fim": fim})
+
+
+async def concluir(
+    evento_id: str,
+    escopo: str = "serie",
+    data: str | None = None,
+    real_min: int | None = None,
+) -> dict:
+    """Marca um evento (ou uma ocorrência) como concluído. real_min = minutos
+    realmente gastos — alimenta os fatores adaptativos de estimativa (Marco C3).
+    escopo=ocorrencia exige data (YYYY-MM-DD)."""
+    params = {"escopo": escopo}
+    if data:
+        params["data"] = data
+    corpo = {"real_min": real_min} if real_min is not None else None
+    return await _api(
+        "POST", f"/eventos/{evento_id}/concluir/", json=corpo, params=params
+    )
 
 
 async def simular_plano(
@@ -107,6 +161,8 @@ async def _aguardar_job(caminho_status, job_id):
     passado = 0.0
     while passado < timeout:
         status = await _api("GET", f"{caminho_status}/{job_id}")
+        if "erro" in status:  # job expirado/apagado: devolve já, não até o timeout
+            return {**status, "job_id": job_id}
         if status.get("status") == "pronto":
             return {"job_id": job_id, **status["resultado"]}
         if status.get("status") == "erro":
@@ -206,7 +262,10 @@ async def remarcar(
 for _fn in (
     criar_tarefa,
     listar_classes,
+    listar_tarefas,
     listar_pendentes,
+    consultar_agenda,
+    concluir,
     simular_plano,
     gerar_cenarios,
     refinar_cenario,
