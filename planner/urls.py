@@ -43,5 +43,41 @@ urlpatterns = [
         views.planejamento_aplicar,
         name="planejamento-aplicar",
     ),
+    path(
+        "planejamento/cenarios",
+        views.planejamento_cenarios,
+        name="cenarios",
+    ),
+    path(
+        "planejamento/cenarios/escolher",
+        views.planejamento_cenarios_escolher,
+        name="cenarios-escolher",
+    ),
+    # Antes de cenarios/<job_id>: "refinar" casaria com <str:job_id>.
+    path(
+        "planejamento/cenarios/refinar",
+        views.planejamento_cenarios_refinar,
+        name="cenarios-refinar",
+    ),
+    path(
+        "planejamento/cenarios/refinar/<str:job_id>",
+        views.planejamento_cenarios_refinar_status,
+        name="cenarios-refinar-status",
+    ),
+    path(
+        "planejamento/cenarios/<str:job_id>",
+        views.planejamento_cenarios_status,
+        name="cenarios-status",
+    ),
+    path(
+        "planejamento/replanejar",
+        views.planejamento_replanejar,
+        name="replanejar",
+    ),
+    path(
+        "planejamento/replanejar/aplicar",
+        views.planejamento_replanejar_aplicar,
+        name="replanejar-aplicar",
+    ),
     path("", include(router.urls)),
 ]

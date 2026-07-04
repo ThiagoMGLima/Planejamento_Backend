@@ -85,6 +85,19 @@ services:
       ollama:
         condition: service_started
 
+  # Servidor MCP (Marco C4): camada fina de ferramentas sobre a API HTTP —
+  # torna o backend usável por qualquer runtime de agente (cliente MCP em
+  # http://localhost:8765/mcp). Zero lógica própria, zero Django.
+  mcp:
+    build: ./mcp_server
+    environment:
+      API_BASE_URL: http://web:8000/api/v1
+    ports:
+      - "8765:8765"
+    depends_on:
+      web:
+        condition: service_healthy
+
 volumes:
   pgdata: {}
   ollama_models: {}

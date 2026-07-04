@@ -106,10 +106,35 @@ docker compose exec web python manage.py seed_planejamento --clear    # dataset 
 | GET | `/planejamento/planejar-ia/estimativa` | Tempo estimado da geração, antes de disparar |
 | GET | `/planejamento/planejar-ia/{job_id}` | Estado/resultado do job assíncrono |
 | POST | `/planejamento/aplicar` | Cria os eventos-sessão a partir do plano revisado |
+| POST | `/planejamento/cenarios` | 3–4 cenários com trade-offs → 202 `{job_id}` (ou 200 se em cache) |
+| GET | `/planejamento/cenarios/{job_id}` | Estado/resultado do job de cenários |
+| POST | `/planejamento/cenarios/escolher` | Grava a escolha (aprende pesos); `aplicar=true` persiste o plano |
+| POST | `/planejamento/replanejar` | Replaneja do agora em diante (simulação: plano + diff) |
+| POST | `/planejamento/replanejar/aplicar` | Recalcula e persiste (substitui as sessões futuras) |
 
 Listas de `/classes/` e `/tarefas/` são paginadas por cursor (`{next, previous,
 results}`); `/eventos`, `/pendentes` e `/feriados` retornam arrays. Rotas do
 router exigem **barra no final**.
+
+## Servidor MCP (agente conversacional)
+
+O serviço `mcp` do compose expõe as ferramentas do backend via
+**Model Context Protocol** (transporte streamable-http) em
+`http://localhost:8765/mcp` — camada fina sobre a API, zero lógica própria.
+Ferramentas: `criar_tarefa`, `listar_classes`, `listar_pendentes`,
+`simular_plano` (what-if, não persiste), `gerar_cenarios` (encapsula o
+polling), `escolher_cenario`, `replanejar` (simular/aplicar) e `remarcar`.
+
+Qualquer cliente MCP serve como runtime do agente. Exemplo com Claude Code:
+
+```bash
+claude mcp add --transport http planejador http://localhost:8765/mcp
+```
+
+Realismo de hardware: o 7B/CPU local dá conta das chamadas únicas com schema
+(diretrizes, cenários); agência multi-turno com tool use pede modelo maior —
+o runtime do agente é externo e trocável (as variáveis `AGENTE_*` ficam fora
+do core do backend). Solver, diretrizes e dados continuam 100% locais.
 
 ## Desenvolvimento e testes
 

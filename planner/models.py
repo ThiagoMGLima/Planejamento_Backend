@@ -135,6 +135,89 @@ class Evento(TimestampedModel):
         return self.titulo
 
 
+class PesoPreferencia(TimestampedModel):
+    """Peso aprendido de uma métrica de cenário (Marco C1b, §2.4 da visão).
+
+    Aprendido por escolha revelada (EWMA em services/adaptacao.py); 1.0 é o
+    neutro. Ordena e sugere cenários, nunca filtra.
+    """
+
+    metrica = models.CharField(max_length=40, unique=True)
+    valor = models.FloatField(default=1.0)
+
+    class Meta:
+        verbose_name = "Peso de preferência"
+        verbose_name_plural = "Pesos de preferência"
+
+    def __str__(self):
+        return f"{self.metrica}={self.valor:.2f}"
+
+
+class EscolhaCenario(TimestampedModel):
+    """Escolha CRUA de um lote de cenários exibido (Marco C1b).
+
+    Guarda o lote inteiro (com métricas) e qual cenário foi escolhido — permite
+    trocar a regra de aprendizado depois e recalcular os pesos do zero.
+    """
+
+    lote = models.JSONField()  # todos os cenários exibidos + métricas
+    escolhido = models.CharField(max_length=60)  # id do cenário escolhido
+    era_sugerido = models.BooleanField()
+    pesos_no_momento = models.JSONField()  # auditoria/replay
+
+    class Meta:
+        verbose_name = "Escolha de cenário"
+        verbose_name_plural = "Escolhas de cenário"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        return f"{self.escolhido} ({self.criado_em:%Y-%m-%d})"
+
+
+class RegistroExecucao(TimestampedModel):
+    """Histórico cru de execução (Marco C3) — base dos fatores adaptativos.
+
+    Escrito pelos fluxos `concluir`/`remarcar` de services/completion.py.
+    `real_min` é opcional (o usuário informa se quiser); sem ele o registro
+    ainda vale para o score de flexibilidade (taxa de remarcação).
+    """
+
+    tarefa = models.ForeignKey(
+        Tarefa,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="execucoes",
+    )
+    evento = models.ForeignKey(
+        Evento,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="execucoes",
+    )
+    classe = models.ForeignKey(
+        Classe,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="execucoes",
+    )
+    planejado_min = models.PositiveIntegerField(null=True, blank=True)
+    real_min = models.PositiveIntegerField(null=True, blank=True)
+    remarcado = models.BooleanField(default=False)
+    concluido_em = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Registro de execução"
+        verbose_name_plural = "Registros de execução"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        acao = "remarcado" if self.remarcado else "concluído"
+        return f"{acao} ({self.criado_em:%Y-%m-%d})"
+
+
 class Ocorrencia(TimestampedModel):
     """Materialização de uma data de um evento recorrente (Handoff §4.5).
 

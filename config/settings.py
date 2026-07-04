@@ -140,9 +140,17 @@ REST_FRAMEWORK = {
 # --- CORS (origem local do frontend) — Handoff §13 -----------------------
 CORS_ALLOWED_ORIGINS = env("CORS_ALLOWED_ORIGINS")
 
-# --- Celery (provisionado; sem jobs no MVP) — Handoff §13 ----------------
-CELERY_BROKER_URL = REDIS_URL or "redis://redis:6379/0"
-CELERY_RESULT_BACKEND = REDIS_URL or "redis://redis:6379/0"
+# --- Celery — Handoff §13 -------------------------------------------------
+# Broker/backend configuráveis por env: a CI roda SEM Redis (memory:// e
+# cache+memory://) — senão os testes eager que armazenam resultado tentariam
+# conectar em redis://redis e falhariam. No compose o default cai no serviço
+# redis, como sempre.
+CELERY_BROKER_URL = env(
+    "CELERY_BROKER_URL", default=REDIS_URL or "redis://redis:6379/0"
+)
+CELERY_RESULT_BACKEND = env(
+    "CELERY_RESULT_BACKEND", default=REDIS_URL or "redis://redis:6379/0"
+)
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 

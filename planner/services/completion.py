@@ -7,7 +7,7 @@ PENDENTE é calculado na leitura, nunca gravado. `concluir`/`remarcar` são as
 from django.db import transaction
 from django.utils import timezone
 
-from ..models import Evento, Ocorrencia, Tarefa
+from ..models import Evento, Ocorrencia, RegistroExecucao, Tarefa
 
 PENDENTE = "PENDENTE"
 PULADO = "PULADO"
@@ -52,9 +52,27 @@ def _reabrir_ou_recriar_tarefa(evento):
     )
 
 
+def _registrar_execucao(evento, remarcado, real_min=None):
+    """Grava o histórico cru (Marco C3) — insumo dos fatores adaptativos."""
+    RegistroExecucao.objects.create(
+        tarefa=evento.origem_tarefa,
+        evento=evento,
+        classe=evento.classe,
+        planejado_min=int((evento.fim - evento.inicio).total_seconds() // 60),
+        real_min=real_min,
+        remarcado=remarcado,
+        concluido_em=None if remarcado else timezone.now(),
+    )
+
+
 @transaction.atomic
-def concluir(evento, escopo="serie", data=None):
-    """Marca CONCLUIDO. Em ocorrência, grava status_override = CONCLUIDO."""
+def concluir(evento, escopo="serie", data=None, real_min=None):
+    """Marca CONCLUIDO. Em ocorrência, grava status_override = CONCLUIDO.
+
+    `real_min` (opcional, informado pelo usuário) alimenta o fator de
+    estimativa por classe; sem ele o registro ainda vale p/ flexibilidade.
+    """
+    _registrar_execucao(evento, remarcado=False, real_min=real_min)
     if escopo == "ocorrencia":
         ocorrencia = _get_or_create_ocorrencia(evento, data)
         ocorrencia.status_override = Evento.Status.CONCLUIDO
@@ -73,6 +91,7 @@ def remarcar(evento, escopo="serie", data=None):
     Remarcar não abre seletor de horário: encerra a ocorrência/série e reabre o
     Inbox para reentrar no ritual semanal.
     """
+    _registrar_execucao(evento, remarcado=True)
     if escopo == "ocorrencia":
         ocorrencia = _get_or_create_ocorrencia(evento, data)
         ocorrencia.status_override = Evento.Status.REMARCADO

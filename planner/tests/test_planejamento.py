@@ -8,13 +8,14 @@ A maioria é teste puro (calcular_plano não toca no banco); só
 `intervalos_ocupados` precisa de DB.
 """
 
-from datetime import timedelta
+from dataclasses import replace
+from datetime import date, timedelta
 
 import pytest
 
 from planner.services import planejamento as P
 
-from .factories import EventoFactory, RegraRecorrenciaFactory, aware
+from .factories import EventoFactory, RegraRecorrenciaFactory, TarefaFactory, aware
 
 # 2026-06-01 é uma segunda-feira (mesma âncora dos demais testes).
 SEG = aware(2026, 6, 1, 8)
@@ -255,6 +256,98 @@ def test_knobs_preservam_invariantes():
 
 
 # --------------------------------------------------------------------------- #
+# Alavancas de cenário (C1a): janela_por_dia, usar_fds, dias_bloqueados        #
+# --------------------------------------------------------------------------- #
+def test_janela_por_dia_estende_so_a_quinta():
+    prefs, _ = P.montar_preferencias({"janela_inicio": "08:00", "janela_fim": "18:00"})
+    prefs = replace(prefs, janela_por_dia={"3": (8 * 60, 20 * 60)})
+    # Semana toda ocupada 08–18: só a quinta (estendida até 20h) tem folga.
+    ocupado = [(aware(2026, 6, d, 8), aware(2026, 6, d, 18)) for d in range(1, 6)]
+    t = _tarefa("A", 120, aware(2026, 6, 5, 18))
+    sessoes, nao = P.calcular_plano([t], ocupado, prefs, SEG, t.deadline)
+    assert nao == []
+    assert all(s.inicio.date() == date(2026, 6, 4) for s in sessoes)  # quinta
+    assert min(s.inicio for s in sessoes) == aware(2026, 6, 4, 18)
+    assert max(s.fim for s in sessoes) == aware(2026, 6, 4, 20)
+
+
+def test_janela_por_data_vence_dia_da_semana():
+    prefs, _ = P.montar_preferencias(
+        {
+            "janela_inicio": "08:00",
+            "janela_fim": "18:00",
+            "max_min_por_dia_por_tarefa": None,
+        }
+    )
+    prefs = replace(
+        prefs,
+        janela_por_dia={"3": (8 * 60, 19 * 60), "2026-06-04": (8 * 60, 21 * 60)},
+    )
+    ocupado = [(aware(2026, 6, d, 8), aware(2026, 6, d, 18)) for d in range(1, 6)]
+    # 180 min só cabem na quinta se a data (até 21h) vencer o dia-da-semana (19h).
+    t = _tarefa("A", 180, aware(2026, 6, 5, 18))
+    sessoes, nao = P.calcular_plano([t], ocupado, prefs, SEG, t.deadline)
+    assert nao == []
+    assert all(s.inicio.date() == date(2026, 6, 4) for s in sessoes)
+    assert max(s.fim for s in sessoes) == aware(2026, 6, 4, 21)
+
+
+def test_dias_bloqueados_fica_vazio_quando_ha_alternativa():
+    prefs, _ = P.montar_preferencias({})
+    prefs = replace(prefs, dias_bloqueados=frozenset({date(2026, 6, 2)}))
+    t = _tarefa("A", 240, aware(2026, 6, 5, 18))
+    sessoes, nao = P.calcular_plano([t], [], prefs, SEG, t.deadline)
+    assert nao == []
+    assert _total(sessoes, "A") == 240
+    assert all(s.inicio.date() != date(2026, 6, 2) for s in sessoes)
+
+
+def test_dias_bloqueados_liberado_no_nivel_5_quando_e_a_unica_saida():
+    prefs, _ = P.montar_preferencias({})
+    # Deadline hoje mesmo: o único dia possível está bloqueado → níveis 0–4 não
+    # acham slot; o 5 libera o bloqueio para não perder o prazo.
+    prefs = replace(prefs, dias_bloqueados=frozenset({date(2026, 6, 1)}))
+    t = _tarefa("A", 60, aware(2026, 6, 1, 22))
+    sessoes, nao = P.calcular_plano([t], [], prefs, SEG, t.deadline)
+    assert nao == []
+    assert [s.inicio.date() for s in sessoes] == [date(2026, 6, 1)]
+
+
+def test_usar_fds_libera_fim_de_semana_no_nivel_0():
+    prefs, _ = P.montar_preferencias({})
+    sabado = aware(2026, 6, 6, 8)
+    t = _tarefa("A", 240, aware(2026, 6, 12, 18))
+    # Sem a alavanca cabe em seg+ter (nível 0 nunca relaxa): fds intocado.
+    sessoes, _ = P.calcular_plano([t], [], prefs, sabado, t.deadline)
+    assert all(s.inicio.weekday() < 5 for s in sessoes)
+    # Com usar_fds=True o fds vira escolha desde o nível 0: sáb+dom entram antes.
+    sessoes, nao = P.calcular_plano(
+        [t], [], replace(prefs, usar_fds=True), sabado, t.deadline
+    )
+    assert nao == []
+    assert {s.inicio.weekday() for s in sessoes} == {5, 6}
+
+
+def test_sem_diretrizes_novas_nivel_5_e_identico_ao_4():
+    prefs, _ = P.montar_preferencias({})
+    assert P._prefs_do_nivel(prefs, 5) == P._prefs_do_nivel(prefs, 4)
+
+
+def test_defaults_neutros_nao_mudam_o_plano():
+    prefs, _ = P.montar_preferencias({})
+    assert prefs.janela_por_dia is None
+    assert prefs.usar_fds is None
+    assert prefs.dias_bloqueados == frozenset()
+    neutro = replace(
+        prefs, janela_por_dia=None, usar_fds=None, dias_bloqueados=frozenset()
+    )
+    t = _tarefa("A", 300, SEG + timedelta(days=5))
+    assert P.calcular_plano([t], [], prefs, SEG, t.deadline) == P.calcular_plano(
+        [t], [], neutro, SEG, t.deadline
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Eventos ocupados (precisa de DB)                                             #
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db
@@ -273,3 +366,22 @@ def test_intervalos_ocupados_inclui_simples_e_recorrentes():
     assert (aware(2026, 6, 1, 9), aware(2026, 6, 1, 11)) in ocupado
     assert (aware(2026, 6, 1, 14), aware(2026, 6, 1, 16)) in ocupado
     assert (aware(2026, 6, 8, 14), aware(2026, 6, 8, 16)) in ocupado
+
+
+@pytest.mark.django_db
+def test_montar_plano_aplica_diretrizes_de_cenario():
+    tarefa = TarefaFactory(esforco_estimado=60, deadline=aware(2026, 6, 5, 18))
+    diretrizes = {
+        "janela_por_dia": {"3": ["08:00", "20:00"]},
+        "usar_fds": True,
+        "dias_bloqueados": ["2026-06-02"],
+    }
+    res = P.montar_plano([tarefa], SEG, {}, diretrizes)
+    # Normalização interna (minutos/dates) + echo transparente no shape da API.
+    assert res.prefs.janela_por_dia == {"3": (8 * 60, 20 * 60)}
+    assert res.prefs.usar_fds is True
+    assert res.prefs.dias_bloqueados == frozenset({date(2026, 6, 2)})
+    assert res.prefs_usadas["janela_por_dia"] == {"3": ["08:00", "20:00"]}
+    assert res.prefs_usadas["usar_fds"] is True
+    assert res.prefs_usadas["dias_bloqueados"] == ["2026-06-02"]
+    assert all(s.inicio.date() != date(2026, 6, 2) for s in res.sessoes)

@@ -13,8 +13,8 @@ Decisões (ver docs/tasks/planejamento-producao-multitarefa.md):
 """
 
 import math
-from dataclasses import dataclass, replace
-from datetime import datetime, time, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, time, timedelta
 
 from django.utils import timezone
 
@@ -49,14 +49,21 @@ DEFAULTS = {
 }
 
 # Ordem do relaxamento por tarefa (§4, passo 4). Cada nível afrouxa mais uma
-# preferência e re-tenta só o que falta.
-NIVEIS = (0, 1, 2, 3, 4)
+# preferência e re-tenta só o que falta. O nível 5 só libera `dias_bloqueados`
+# (a preferência mais "dura"); sem diretrizes novas é idêntico ao 4.
+NIVEIS = (0, 1, 2, 3, 4, 5)
 MIN_POR_DIA = 24 * 60
 
 
 @dataclass
 class Preferencias:
-    """Preferências efetivas já normalizadas (janelas em minutos do dia)."""
+    """Preferências efetivas já normalizadas (janelas em minutos do dia).
+
+    Os 3 últimos campos são alavancas de CENÁRIO (Marco C1a), setadas só via
+    diretrizes em `montar_plano`; os defaults neutros preservam o comportamento
+    atual. `janela_por_dia`: chave "0".."6" (dia da semana) ou "YYYY-MM-DD"
+    (data; vence o dia da semana) → (inicio_min, fim_min).
+    """
 
     janela_inicio_min: int
     janela_fim_min: int
@@ -66,6 +73,9 @@ class Preferencias:
     sessao_min: int
     sessao_max: int
     granularidade: int
+    janela_por_dia: dict | None = None
+    usar_fds: bool | None = None  # True libera o fds já no nível 0
+    dias_bloqueados: frozenset = frozenset()  # datas (date) sem NENHUMA sessão
 
 
 @dataclass
@@ -78,6 +88,8 @@ class _PrefsNivel:
     max_dia_tarefa: int | None
     max_dia_total: int | None
     sessao_min: int
+    janela_por_dia: dict | None = None
+    dias_bloqueados: frozenset = field(default_factory=frozenset)
 
 
 @dataclass
@@ -148,6 +160,8 @@ def montar_preferencias(entrada):
 def _prefs_do_nivel(prefs, nivel):
     """Aplica o relaxamento acumulado até `nivel` (§4, passo 4)."""
     evitar_fds = prefs.evitar_fds
+    if prefs.usar_fds:  # escolha explícita do cenário: fds liberado desde o 0
+        evitar_fds = False
     janela_inicio = prefs.janela_inicio_min
     janela_fim = prefs.janela_fim_min
     max_tarefa = prefs.max_min_por_dia_por_tarefa
@@ -164,24 +178,38 @@ def _prefs_do_nivel(prefs, nivel):
     if nivel >= 4:  # 4) permitir sessões menores que sessao_min
         sessao_min = prefs.granularidade
     return _PrefsNivel(
-        evitar_fds, janela_inicio, janela_fim, max_tarefa, max_total, sessao_min
+        evitar_fds,
+        janela_inicio,
+        janela_fim,
+        max_tarefa,
+        max_total,
+        sessao_min,
+        # Overrides por dia valem enquanto a janela do usuário vale; no 24h
+        # (nível ≥ 3) o relaxamento final continua soberano.
+        janela_por_dia=prefs.janela_por_dia if nivel < 3 else None,
+        # 5) liberar dias bloqueados — último recurso antes de `nao_alocado`.
+        dias_bloqueados=prefs.dias_bloqueados if nivel < 5 else frozenset(),
     )
 
 
 # --------------------------------------------------------------------------- #
 # Eventos ocupados                                                             #
 # --------------------------------------------------------------------------- #
-def intervalos_ocupados(agora, horizonte_fim):
+def intervalos_ocupados(agora, horizonte_fim, excluir_evento_ids=None):
     """Intervalos [inicio, fim] bloqueados no horizonte, já mesclados.
 
     Cobre eventos simples (query direta) e recorrentes (expandidos sob demanda,
     igual EventoViewSet.list). Ocorrências PULADAS são omitidas por `expandir`.
+    `excluir_evento_ids` tira eventos simples do bloqueio — o replanejar (C2)
+    exclui as sessões que serão substituídas, senão elas se auto-bloqueiam.
     """
     intervalos = []
 
     simples = Evento.objects.filter(
         regra_recorrencia__isnull=True, inicio__lt=horizonte_fim, fim__gt=agora
     ).only("inicio", "fim")
+    if excluir_evento_ids:
+        simples = simples.exclude(id__in=excluir_evento_ids)
     for ev in simples:
         intervalos.append((ev.inicio, ev.fim))
 
@@ -233,22 +261,46 @@ def _snap_acima(dt, granularidade, tz):
     return base + timedelta(minutes=snapped)
 
 
+def _janela_do_dia(dia, pn):
+    """(ini_min, fim_min) do dia ou None (dia fora do plano).
+
+    Precedência: bloqueio > fim de semana (se `evitar_fds`) > override por data
+    > override por dia-da-semana > janela global do nível. Os overrides e
+    bloqueios já chegam filtrados por nível via `_prefs_do_nivel` (níveis ≥ 3
+    ignoram overrides; o 5 libera bloqueios). Um override por data NÃO libera o
+    fim de semana — para isso existe `usar_fds`.
+    """
+    if dia in pn.dias_bloqueados:
+        return None
+    if pn.evitar_fds and dia.weekday() >= 5:
+        return None
+    if pn.janela_por_dia:
+        override = pn.janela_por_dia.get(dia.isoformat()) or pn.janela_por_dia.get(
+            str(dia.weekday())
+        )
+        if override:
+            return override
+    return (pn.janela_inicio_min, pn.janela_fim_min)
+
+
 def slots_livres(inicio_busca, fim_busca, pn, granularidade, ocupado):
     """Intervalos livres dentro de [inicio_busca, fim_busca], dia a dia.
 
-    Para cada dia monta a janela [janela_inicio, janela_fim] (horário local),
-    pula fim de semana se `pn.evitar_fds`, subtrai `ocupado` e snapa os inícios
-    na granularidade. Devolve em ordem cronológica.
+    Para cada dia resolve a janela via `_janela_do_dia` (horário local; pula
+    dias bloqueados e fim de semana se `pn.evitar_fds`), subtrai `ocupado` e
+    snapa os inícios na granularidade. Devolve em ordem cronológica.
     """
     tz = timezone.get_current_timezone()
     slots = []
     dia = timezone.localtime(inicio_busca, tz).date()
     ultimo = timezone.localtime(fim_busca, tz).date()
     while dia <= ultimo:
-        if not (pn.evitar_fds and dia.weekday() >= 5):
+        janela = _janela_do_dia(dia, pn)
+        if janela is not None:
+            ini_min, fim_min = janela
             meia_noite = _midnight_aware(dia, tz)
-            janela_ini = meia_noite + timedelta(minutes=pn.janela_inicio_min)
-            janela_fim = meia_noite + timedelta(minutes=pn.janela_fim_min)
+            janela_ini = meia_noite + timedelta(minutes=ini_min)
+            janela_fim = meia_noite + timedelta(minutes=fim_min)
             ini = max(janela_ini, inicio_busca)
             fim = min(janela_fim, fim_busca)
             if fim > ini:
@@ -466,14 +518,27 @@ def validar_tarefas(tarefa_ids):
 
 
 def montar_plano(
-    tarefas_validas, agora, preferencias_entrada, diretrizes=None, horizonte_dias=None
+    tarefas_validas,
+    agora,
+    preferencias_entrada,
+    diretrizes=None,
+    horizonte_dias=None,
+    excluir_evento_ids=None,
+    usar_fatores=True,
 ):
     """Monta as TarefaEntrada (aplicando `diretrizes`), define o horizonte e roda
     o solver. `diretrizes` é o dict já validado (ver planejamento_ia); ausente ⇒
     comportamento idêntico ao plano base. `horizonte_dias` (None ⇒ AUTOMATICO)
-    limita a janela do plano; o que não couber cai em `nao_alocado`. Retorna
-    ResultadoPlano.
+    limita a janela do plano; o que não couber cai em `nao_alocado`.
+    `excluir_evento_ids` repassa ao `intervalos_ocupados` (replanejar, C2).
+    `usar_fatores` (C3) multiplica o esforço pelo fator de estimativa aprendido
+    da classe (esforco_efetivo = round(esforco × fator)); o echo em
+    `preferencias_usadas.fatores_classe` expõe os aplicados. O replanejar passa
+    False: lá o esforço já vem em minutos de sessão, não em estimativa.
+    Retorna ResultadoPlano.
     """
+    from . import adaptacao
+
     prefs, prefs_usadas = montar_preferencias(preferencias_entrada or {})
     diretrizes = diretrizes or {}
     prioridades = diretrizes.get("prioridades", {})
@@ -488,16 +553,49 @@ def montar_plano(
         prefs = replace(prefs, max_min_por_dia_total=novo)
         prefs_usadas = {**prefs_usadas, "max_min_por_dia_total": novo}
 
+    # Alavancas de CENÁRIO (C1a). Diferente do teto acima, podem encolher OU
+    # estender a janela do usuário: o cenário é proposta explícita que ele verá
+    # e aceitará, não um ajuste silencioso. Chegam já validadas (guarda-corpo).
+    janela_por_dia = diretrizes.get("janela_por_dia")
+    if janela_por_dia:
+        prefs = replace(
+            prefs,
+            janela_por_dia={
+                chave: (_hhmm_para_min(ini), _hhmm_para_min(fim))
+                for chave, (ini, fim) in janela_por_dia.items()
+            },
+        )
+        prefs_usadas = {**prefs_usadas, "janela_por_dia": janela_por_dia}
+    usar_fds = diretrizes.get("usar_fds")
+    if usar_fds is not None:
+        prefs = replace(prefs, usar_fds=usar_fds)
+        prefs_usadas = {**prefs_usadas, "usar_fds": usar_fds}
+    dias_bloqueados = diretrizes.get("dias_bloqueados")
+    if dias_bloqueados:
+        prefs = replace(
+            prefs,
+            dias_bloqueados=frozenset(date.fromisoformat(d) for d in dias_bloqueados),
+        )
+        prefs_usadas = {**prefs_usadas, "dias_bloqueados": sorted(dias_bloqueados)}
+
+    fatores = {}
+    if usar_fatores:
+        for t in tarefas_validas:
+            cid = str(t.classe_id)
+            if cid not in fatores:
+                fatores[cid] = adaptacao.fator_classe(cid)
+
     tarefas = []
     for t in tarefas_validas:
         tid = str(t.id)
         aj = ajustes.get(tid, {})
+        fator = fatores.get(str(t.classe_id), 1.0)
         tarefas.append(
             TarefaEntrada(
                 id=tid,
                 titulo=t.titulo,
                 classe_id=str(t.classe_id),
-                esforco=t.esforco_estimado,
+                esforco=max(1, round(t.esforco_estimado * fator)),
                 deadline=t.deadline,
                 prioridade=prioridades.get(tid),
                 buffer_dias=aj.get("buffer_dias", 0) or 0,
@@ -505,9 +603,26 @@ def montar_plano(
             )
         )
 
+    aplicados = {cid: f for cid, f in fatores.items() if f != 1.0}
+    if aplicados:
+        prefs_usadas = {**prefs_usadas, "fatores_classe": aplicados}
+
     teto = agora + (timedelta(days=horizonte_dias) if horizonte_dias else JANELA_MAX)
     horizonte_fim = min(max(_deadline_efetiva(te, agora) for te in tarefas), teto)
-    ocupado = intervalos_ocupados(agora, horizonte_fim)
+
+    # Alavanca de REFINO (C5): tira tarefas do plano a pedido explícito do
+    # usuário ("sem academia essa semana"). Depois do horizonte de propósito:
+    # o horizonte segue o do conjunto completo, mantendo as métricas do plano
+    # refinado comparáveis às do base. Nunca esvazia o plano (guarda-corpo já
+    # barra, este é o cinto de segurança).
+    excluir = set(diretrizes.get("excluir_tarefas") or [])
+    if excluir:
+        restantes = [te for te in tarefas if te.id not in excluir]
+        if restantes:
+            tarefas = restantes
+            prefs_usadas = {**prefs_usadas, "excluir_tarefas": sorted(excluir)}
+
+    ocupado = intervalos_ocupados(agora, horizonte_fim, excluir_evento_ids)
     sessoes, nao_alocado = calcular_plano(tarefas, ocupado, prefs, agora, horizonte_fim)
     return ResultadoPlano(
         sessoes=sessoes,
