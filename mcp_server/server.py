@@ -99,6 +99,27 @@ async def simular_plano(
     return await _api("POST", "/planejamento/calcular", json=corpo)
 
 
+async def _aguardar_job(caminho_status, job_id):
+    """Polling de um job assíncrono até pronto/erro/timeout."""
+    # Piso no intervalo: garante que `passado` avança (timeout sempre chega).
+    intervalo = max(float(os.environ.get("MCP_POLL_INTERVALO_S", "5")), 0.01)
+    timeout = float(os.environ.get("MCP_POLL_TIMEOUT_S", "300"))
+    passado = 0.0
+    while passado < timeout:
+        status = await _api("GET", f"{caminho_status}/{job_id}")
+        if status.get("status") == "pronto":
+            return {"job_id": job_id, **status["resultado"]}
+        if status.get("status") == "erro":
+            return {"erro": 500, "detalhe": status, "job_id": job_id}
+        await asyncio.sleep(intervalo)
+        passado += intervalo
+    return {
+        "erro": 504,
+        "detalhe": "tempo esgotado aguardando o processamento",
+        "job_id": job_id,
+    }
+
+
 async def gerar_cenarios(
     tarefa_ids: list[str],
     preferencias: dict | None = None,
@@ -117,25 +138,27 @@ async def gerar_cenarios(
         return resp
     if resp.get("status") == "pronto":  # cache hit
         return {"job_id": resp.get("job_id"), **resp["resultado"]}
+    return await _aguardar_job("/planejamento/cenarios", resp["job_id"])
 
-    job_id = resp["job_id"]
-    # Piso no intervalo: garante que `passado` avança (timeout sempre chega).
-    intervalo = max(float(os.environ.get("MCP_POLL_INTERVALO_S", "5")), 0.01)
-    timeout = float(os.environ.get("MCP_POLL_TIMEOUT_S", "300"))
-    passado = 0.0
-    while passado < timeout:
-        status = await _api("GET", f"/planejamento/cenarios/{job_id}")
-        if status.get("status") == "pronto":
-            return {"job_id": job_id, **status["resultado"]}
-        if status.get("status") == "erro":
-            return {"erro": 500, "detalhe": status, "job_id": job_id}
-        await asyncio.sleep(intervalo)
-        passado += intervalo
-    return {
-        "erro": 504,
-        "detalhe": "tempo esgotado aguardando os cenários",
-        "job_id": job_id,
-    }
+
+async def refinar_cenario(
+    job_id: str, mensagem: str, cenario_id: str | None = None
+) -> dict:
+    """Ajusta um lote de cenários por linguagem natural (ex.: "gostei do B,
+    mas sem academia essa semana"): a IA traduz o pedido em diretrizes, o
+    solver re-roda e o cenário novo entra no MESMO lote (job_id continua
+    valendo para escolher_cenario). cenario_id foca a conversa num cenário;
+    a mensagem também pode citar cenários pelo nome. Encapsula o polling."""
+    corpo = {"job_id": job_id, "mensagem": mensagem}
+    if cenario_id is not None:
+        corpo["cenario_id"] = cenario_id
+    resp = await _api("POST", "/planejamento/cenarios/refinar", json=corpo)
+    if "erro" in resp:
+        return resp
+    refino = await _aguardar_job("/planejamento/cenarios/refinar", resp["job_id"])
+    if "erro" not in refino:
+        refino["job_id"] = job_id  # o lote continua endereçado pelo job original
+    return refino
 
 
 async def escolher_cenario(job_id: str, cenario_id: str, aplicar: bool = False) -> dict:
@@ -186,6 +209,7 @@ for _fn in (
     listar_pendentes,
     simular_plano,
     gerar_cenarios,
+    refinar_cenario,
     escolher_cenario,
     replanejar,
     remarcar,

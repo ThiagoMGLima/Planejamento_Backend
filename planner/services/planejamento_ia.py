@@ -284,6 +284,9 @@ def validar_diretrizes(bruto, tarefas_validas, agora=None, horizonte_fim=None):
     - `usar_fds`: só bool literal; qualquer outra coisa ⇒ descartado.
     - `dias_bloqueados`: datas ISO no horizonte, dedup, máx. 14 (excedente
       descartado; a factibilidade fica com o nível 5 do solver).
+    Alavanca de refino (C5):
+    - `excluir_tarefas`: ids existentes, dedup; descartada por inteiro se
+      excluir TODAS as tarefas (um plano vazio não é um cenário).
     Chaves desconhecidas são removidas. Nunca levanta.
     """
     if not isinstance(bruto, dict):
@@ -360,6 +363,15 @@ def validar_diretrizes(bruto, tarefas_validas, agora=None, horizonte_fim=None):
             break
     if dias_bloqueados:
         resultado["dias_bloqueados"] = dias_bloqueados
+
+    excluir = []
+    entradas = bruto.get("excluir_tarefas")
+    for valor in entradas if isinstance(entradas, (list, tuple)) else []:
+        tid = str(valor)
+        if tid in ids and tid not in excluir:
+            excluir.append(tid)
+    if excluir and len(excluir) < len(ids):
+        resultado["excluir_tarefas"] = sorted(excluir)
 
     return resultado
 

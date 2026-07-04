@@ -105,6 +105,18 @@ INTENCOES_ARQUETIPOS = {
 # --------------------------------------------------------------------------- #
 # IA proponente (1 chamada, schema JSON) — candidatos personalizados           #
 # --------------------------------------------------------------------------- #
+# Descrição das alavancas, compartilhada pelos prompts de geração e de refino.
+_ALAVANCAS_PROMPT = (
+    "ALAVANCAS das diretrizes: prioridades (1 a 5, "
+    "chave = id da tarefa); ajustes_por_tarefa (buffer_dias ≥ 0, "
+    "max_min_por_dia ≥ 1); max_min_por_dia_total (teto diário somando tudo); "
+    "janela_por_dia (chave '0'..'6' = dia da semana, 0=segunda, OU data "
+    "'YYYY-MM-DD'; valor ['HH:MM','HH:MM'] entre 05:00 e 23:59 — pode encolher "
+    "OU estender a janela); usar_fds (true libera fim de semana); "
+    "dias_bloqueados (datas 'YYYY-MM-DD' sem nenhuma sessão). Datas SEMPRE "
+    "entre 'agora' e 'horizonte_fim' dos FATOS. "
+)
+
 SYSTEM_PROMPT_CENARIOS = (
     "Você propõe CENÁRIOS alternativos de rotina para o usuário escolher. "
     "Receberá FATOS já calculados do plano atual. NUNCA invente números, "
@@ -112,14 +124,7 @@ SYSTEM_PROMPT_CENARIOS = (
     "DIFERENTES entre si, cada um com uma intenção clara de trade-off (ex.: "
     "ganhar o sábado estendendo a quinta; suavizar picos; terminar com folga). "
     "Cada cenário tem: nome (curto, em português), intencao (1 frase com o "
-    "trade-off) e diretrizes. ALAVANCAS das diretrizes: prioridades (1 a 5, "
-    "chave = id da tarefa); ajustes_por_tarefa (buffer_dias ≥ 0, "
-    "max_min_por_dia ≥ 1); max_min_por_dia_total (teto diário somando tudo); "
-    "janela_por_dia (chave '0'..'6' = dia da semana, 0=segunda, OU data "
-    "'YYYY-MM-DD'; valor ['HH:MM','HH:MM'] entre 05:00 e 23:59 — pode encolher "
-    "OU estender a janela); usar_fds (true libera fim de semana); "
-    "dias_bloqueados (datas 'YYYY-MM-DD' sem nenhuma sessão). Datas SEMPRE "
-    "entre 'agora' e 'horizonte_fim' dos FATOS. Use 'carga_por_dia' para achar "
+    "trade-off) e diretrizes. " + _ALAVANCAS_PROMPT + "Use 'carga_por_dia' para achar "
     "picos e dias recuperáveis. Os FATOS trazem também o comportamento REAL do "
     "usuário: 'fatores_classe' (razão real/estimado — acima de 1 significa que "
     "a classe costuma demorar mais que o previsto), 'flexibilidade_classe' "
@@ -208,6 +213,80 @@ def gerar_cenarios_ia(contexto):
         if not isinstance(cenarios, list):
             raise ValueError("resposta sem lista de cenários")
         return cenarios
+    except Exception as e:  # rede, timeout, JSON inválido, shape errado
+        raise OllamaIndisponivel(str(e))
+
+
+# --------------------------------------------------------------------------- #
+# Refino conversacional (C5) — "gostei do B, mas sem academia essa semana"     #
+# --------------------------------------------------------------------------- #
+SYSTEM_PROMPT_REFINO = (
+    "Você AJUSTA cenários de rotina conforme o pedido do usuário, numa "
+    "conversa. Receberá FATOS já calculados, os CENÁRIOS atuais (cada um com "
+    "diretrizes e métricas) e o pedido em linguagem natural. NUNCA invente "
+    "números, horários ou datas — derive tudo dos FATOS. Produza UM cenário "
+    "novo: parta das diretrizes do cenário em 'cenario_em_foco' (se o pedido "
+    "citar outro cenário pelo nome, parta dele) e mude SOMENTE o que o pedido "
+    "exigir, preservando o resto. "
+    + _ALAVANCAS_PROMPT
+    + "Alavanca extra do refino: excluir_tarefas (lista de ids de tarefas que "
+    "o usuário pediu para tirar do plano — ex.: 'não vou fazer academia' ⇒ o "
+    "id da tarefa de academia, achado em 'tarefas' dos FATOS pelo título). "
+    "Além das diretrizes, escreva: resposta (1 a 3 frases confirmando o que "
+    "mudou e o trade-off; se o pedido for impossível ou não fizer sentido "
+    "com os FATOS, diga o porquê), nome (curto, derivado do cenário de "
+    "origem, ex.: 'Ritmo leve — sem academia') e intencao (1 frase). Nos "
+    "textos, refira-se às tarefas pelo título, nunca pelo id, e não cite "
+    "nomes técnicos de campos. Responda no schema."
+)
+
+_SCHEMA_DIRETRIZES_REFINO = {
+    "type": "object",
+    "properties": {
+        **_SCHEMA_DIRETRIZES["properties"],
+        "excluir_tarefas": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+SCHEMA_REFINO = {
+    "type": "object",
+    "properties": {
+        "resposta": {"type": "string"},
+        "nome": {"type": "string"},
+        "intencao": {"type": "string"},
+        "diretrizes": _SCHEMA_DIRETRIZES_REFINO,
+    },
+    "required": ["resposta", "nome", "intencao", "diretrizes"],
+}
+
+
+def refinar_cenario_ia(contexto, historico, mensagem):
+    """UMA chamada ao Ollama → {resposta, nome, intencao, diretrizes} bruto.
+
+    `contexto` já traz os FATOS + lote atual + cenário em foco; `historico` é a
+    conversa anterior deste lote (lista {role, content}), reenviada para o
+    modelo manter o fio ("agora também sem o sábado"). Mesmo padrão de
+    degradação dos irmãos: qualquer falha vira OllamaIndisponivel.
+    """
+    try:
+        cli = ollama.Client(
+            host=settings.OLLAMA_BASE_URL, timeout=settings.OLLAMA_TIMEOUT
+        )
+        resp = cli.chat(
+            model=settings.OLLAMA_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_REFINO},
+                {"role": "user", "content": json.dumps(contexto, ensure_ascii=False)},
+                *historico,
+                {"role": "user", "content": mensagem},
+            ],
+            format=SCHEMA_REFINO,
+            options={"temperature": 0},
+        )
+        bruto = json.loads(resp["message"]["content"])
+        if not isinstance(bruto, dict):
+            raise ValueError("resposta de refino não é um objeto")
+        return bruto
     except Exception as e:  # rede, timeout, JSON inválido, shape errado
         raise OllamaIndisponivel(str(e))
 

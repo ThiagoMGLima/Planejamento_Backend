@@ -125,6 +125,40 @@ def test_gerar_cenarios_timeout_vira_erro():
 
 
 @respx.mock
+def test_refinar_cenario_encapsula_o_polling_e_preserva_o_job_do_lote():
+    rota = respx.post(f"{BASE}/planejamento/cenarios/refinar").mock(
+        return_value=httpx.Response(202, json={"job_id": "r1", "status": "processando"})
+    )
+    respx.get(f"{BASE}/planejamento/cenarios/refinar/r1").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "status": "pronto",
+                "resultado": {"resposta": "feito", "cenario": {"id": "b-sem-academia"}},
+            },
+        )
+    )
+    out = _run(server.refinar_cenario("j1", "sem academia essa semana", cenario_id="b"))
+    assert out["job_id"] == "j1"  # lote continua endereçado pelo job original
+    assert out["cenario"]["id"] == "b-sem-academia"
+    corpo = json.loads(rota.calls.last.request.content)
+    assert corpo == {
+        "job_id": "j1",
+        "mensagem": "sem academia essa semana",
+        "cenario_id": "b",
+    }
+
+
+@respx.mock
+def test_refinar_cenario_lote_expirado_vira_erro():
+    respx.post(f"{BASE}/planejamento/cenarios/refinar").mock(
+        return_value=httpx.Response(404, json={"job_id": ["Job desconhecido."]})
+    )
+    out = _run(server.refinar_cenario("morto", "sem academia"))
+    assert out["erro"] == 404
+
+
+@respx.mock
 def test_escolher_cenario():
     rota = respx.post(f"{BASE}/planejamento/cenarios/escolher").mock(
         return_value=httpx.Response(200, json={"aplicado": True, "eventos_criados": 3})
@@ -181,6 +215,7 @@ def test_tools_registradas_no_servidor():
         "listar_pendentes",
         "simular_plano",
         "gerar_cenarios",
+        "refinar_cenario",
         "escolher_cenario",
         "replanejar",
         "remarcar",

@@ -303,6 +303,18 @@ class EscolherCenarioSerializer(serializers.Serializer):
     aplicar = serializers.BooleanField(required=False, default=False)
 
 
+class RefinarCenarioSerializer(serializers.Serializer):
+    """Corpo de POST /planejamento/cenarios/refinar (Marco C5).
+
+    `cenario_id` é o cenário em foco (o card cujo chat foi aberto); opcional —
+    a mensagem pode citar qualquer cenário do lote pelo nome.
+    """
+
+    job_id = serializers.CharField()
+    cenario_id = serializers.CharField(required=False, allow_null=True)
+    mensagem = serializers.CharField(max_length=2000)
+
+
 class ReplanejarSerializer(serializers.Serializer):
     """Corpo de POST /planejamento/replanejar[/aplicar] (Marco C2).
 

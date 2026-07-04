@@ -53,6 +53,17 @@ urlpatterns = [
         views.planejamento_cenarios_escolher,
         name="cenarios-escolher",
     ),
+    # Antes de cenarios/<job_id>: "refinar" casaria com <str:job_id>.
+    path(
+        "planejamento/cenarios/refinar",
+        views.planejamento_cenarios_refinar,
+        name="cenarios-refinar",
+    ),
+    path(
+        "planejamento/cenarios/refinar/<str:job_id>",
+        views.planejamento_cenarios_refinar_status,
+        name="cenarios-refinar-status",
+    ),
     path(
         "planejamento/cenarios/<str:job_id>",
         views.planejamento_cenarios_status,

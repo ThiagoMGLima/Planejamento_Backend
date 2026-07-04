@@ -31,6 +31,7 @@ from .serializers import (
     EventoSerializer,
     PlanejarSerializer,
     PromoverSerializer,
+    RefinarCenarioSerializer,
     ReplanejarSerializer,
     TarefaSerializer,
 )
@@ -621,6 +622,80 @@ def planejamento_cenarios_escolher(request):
         return Response(e.erros, status=http_status.HTTP_400_BAD_REQUEST)
 
     return Response(corpo)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def planejamento_cenarios_refinar(request):
+    """POST /planejamento/cenarios/refinar → conversa sobre o lote (Marco C5).
+
+    "Gostei do B, mas sem academia essa semana": a IA traduz o pedido em
+    diretrizes, o solver re-roda e o cenário novo entra no MESMO lote (o
+    `escolher` segue valendo pelo job_id original). Assíncrono como o gerar:
+    202 + polling em GET /planejamento/cenarios/refinar/{refino_id}.
+    """
+    entrada = RefinarCenarioSerializer(data=request.data)
+    entrada.is_valid(raise_exception=True)
+    dados = entrada.validated_data
+
+    resultado = cache.get(f"cenarios_job:{dados['job_id']}")
+    if resultado is None:
+        job = AsyncResult(str(dados["job_id"]))
+        resultado = job.result if job.successful() else None
+    if not resultado or "cenarios" not in resultado:
+        return Response(
+            {"job_id": ["Job desconhecido, não finalizado ou expirado."]},
+            status=http_status.HTTP_404_NOT_FOUND,
+        )
+    if not resultado.get("entrada"):
+        return Response(
+            {
+                "job_id": [
+                    "Lote antigo, sem dados de entrada; gere os cenários de novo."
+                ]
+            },
+            status=http_status.HTTP_409_CONFLICT,
+        )
+
+    cenario_id = dados.get("cenario_id")
+    ids = {c["id"] for c in resultado["cenarios"]}
+    if cenario_id is not None and cenario_id not in ids:
+        return Response(
+            {"cenario_id": ["Cenário inexistente neste lote."]},
+            status=http_status.HTTP_400_BAD_REQUEST,
+        )
+
+    job = tasks.refinar_cenario_task.delay(
+        dados["job_id"], cenario_id, dados["mensagem"]
+    )
+    # 1 chamada de IA + solver: mesma ordem de grandeza do gerar; o nº de
+    # tarefas sai do plano base do lote (nada de re-rodar o solver aqui).
+    base = next(c for c in resultado["cenarios"] if c["id"] == "base")
+    n = len({s["tarefa_id"] for s in base["plano"]["sessoes"]})
+    return Response(
+        {
+            "job_id": job.id,
+            "status": "processando",
+            "tempo_estimado_s": settings.PLANEJAR_TEMPO_BASE_S
+            + settings.PLANEJAR_TEMPO_POR_TAREFA_S * n,
+        },
+        status=http_status.HTTP_202_ACCEPTED,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def planejamento_cenarios_refinar_status(request, job_id):
+    """GET /planejamento/cenarios/refinar/{job_id} → estado do refino."""
+    hit = cache.get(f"cenarios_refino:{job_id}")
+    if hit is not None:
+        return Response({"status": "pronto", "resultado": hit})
+    resultado = AsyncResult(str(job_id))
+    if resultado.successful():
+        return Response({"status": "pronto", "resultado": resultado.result})
+    if resultado.failed():
+        return Response({"status": "erro", "detalhe": "falha no processamento"})
+    return Response({"status": "processando"})
 
 
 # --------------------------------------------------------------------------- #

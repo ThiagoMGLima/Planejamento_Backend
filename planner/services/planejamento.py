@@ -609,6 +609,19 @@ def montar_plano(
 
     teto = agora + (timedelta(days=horizonte_dias) if horizonte_dias else JANELA_MAX)
     horizonte_fim = min(max(_deadline_efetiva(te, agora) for te in tarefas), teto)
+
+    # Alavanca de REFINO (C5): tira tarefas do plano a pedido explícito do
+    # usuário ("sem academia essa semana"). Depois do horizonte de propósito:
+    # o horizonte segue o do conjunto completo, mantendo as métricas do plano
+    # refinado comparáveis às do base. Nunca esvazia o plano (guarda-corpo já
+    # barra, este é o cinto de segurança).
+    excluir = set(diretrizes.get("excluir_tarefas") or [])
+    if excluir:
+        restantes = [te for te in tarefas if te.id not in excluir]
+        if restantes:
+            tarefas = restantes
+            prefs_usadas = {**prefs_usadas, "excluir_tarefas": sorted(excluir)}
+
     ocupado = intervalos_ocupados(agora, horizonte_fim, excluir_evento_ids)
     sessoes, nao_alocado = calcular_plano(tarefas, ocupado, prefs, agora, horizonte_fim)
     return ResultadoPlano(
