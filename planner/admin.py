@@ -2,7 +2,14 @@
 
 from django.contrib import admin
 
-from .models import Classe, Evento, Ocorrencia, RegraRecorrencia, Tarefa
+from .models import (
+    Classe,
+    Evento,
+    FeriadoLocal,
+    Ocorrencia,
+    RegraRecorrencia,
+    Tarefa,
+)
 
 
 @admin.register(Classe)
@@ -39,3 +46,10 @@ class OcorrenciaAdmin(admin.ModelAdmin):
     list_display = ("evento", "data", "status_override")
     list_filter = ("status_override",)
     date_hierarchy = "data"
+
+
+@admin.register(FeriadoLocal)
+class FeriadoLocalAdmin(admin.ModelAdmin):
+    list_display = ("nome", "dia", "mes", "ano")
+    list_filter = ("mes",)
+    search_fields = ("nome",)
