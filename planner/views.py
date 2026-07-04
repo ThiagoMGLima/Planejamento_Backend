@@ -5,6 +5,7 @@ concluir/remarcar (com escopo), pendentes e feriados.
 """
 
 from datetime import date, timedelta
+from uuid import uuid4
 
 from celery.result import AsyncResult
 from django.conf import settings
@@ -526,7 +527,11 @@ def planejamento_cenarios(request):
     )
     hit = cache.get(chave)
     if hit is not None:
-        return Response({"status": "pronto", "resultado": hit})
+        # Cache-hit também ganha um job_id (chave por job): sem ele o lote não
+        # seria endereçável pelo escolher nem pelo refinar (C5).
+        job_id = str(uuid4())
+        cache.set(f"cenarios_job:{job_id}", hit, timeout=3600)
+        return Response({"status": "pronto", "job_id": job_id, "resultado": hit})
 
     job = tasks.gerar_cenarios_task.delay(
         ids, agora.isoformat(), prefs_entrada, horizonte_dias

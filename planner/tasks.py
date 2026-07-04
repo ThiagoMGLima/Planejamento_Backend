@@ -242,6 +242,14 @@ def refinar_cenario_task(self, job_id, cenario_id, mensagem):
     )
     metricas_base = cenarios.metricas_do_plano(base)
 
+    # Lote ENXUTO no contexto: só o cenário EM FOCO leva diretrizes; os demais
+    # entram como id/nome/intencao (sem diretrizes, métricas ou trade-offs).
+    # Testado no 7B: diretrizes numéricas dos outros cenários ancoram o modelo
+    # a imitá-las e ele ignora `excluir_tarefas`. As métricas o código
+    # recalcula depois — o modelo não precisa delas.
+    foco = cenario_id or next(
+        (c["id"] for c in resultado["cenarios"] if c.get("sugerido")), "base"
+    )
     contexto = {
         **planejamento_ia.construir_contexto(base),
         "cenarios": [
@@ -249,13 +257,11 @@ def refinar_cenario_task(self, job_id, cenario_id, mensagem):
                 "id": c["id"],
                 "nome": c["nome"],
                 "intencao": c["intencao"],
-                "diretrizes": c["diretrizes"],
-                "metricas": c["metricas"],
-                "trade_offs": c["trade_offs"],
+                **({"diretrizes": c["diretrizes"]} if c["id"] == foco else {}),
             }
             for c in resultado["cenarios"]
         ],
-        "cenario_em_foco": cenario_id,
+        "cenario_em_foco": foco,
     }
     chave_conversa = f"cenarios_conversa:{job_id}"
     historico = cache.get(chave_conversa) or []

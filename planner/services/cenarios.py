@@ -229,9 +229,15 @@ SYSTEM_PROMPT_REFINO = (
     "citar outro cenário pelo nome, parta dele) e mude SOMENTE o que o pedido "
     "exigir, preservando o resto. "
     + _ALAVANCAS_PROMPT
-    + "Alavanca extra do refino: excluir_tarefas (lista de ids de tarefas que "
-    "o usuário pediu para tirar do plano — ex.: 'não vou fazer academia' ⇒ o "
-    "id da tarefa de academia, achado em 'tarefas' dos FATOS pelo título). "
+    + "REGRA OBRIGATÓRIA — excluir_tarefas: sempre que o pedido disser que o "
+    "usuário NÃO vai fazer uma tarefa ('sem academia', 'tira o relatório', "
+    "'pulo o inglês'), você DEVE colocar o id dessa tarefa (ache em 'tarefas' "
+    "dos FATOS pelo título) na lista excluir_tarefas das diretrizes — ela "
+    "REMOVE a tarefa do plano. NUNCA simule a remoção com prioridades, tetos "
+    "ou janelas: esses ajustes NÃO removem nada. EXEMPLO: pedido 'não vou "
+    "fazer academia essa semana' com a tarefa 'Academia' de id 'abc-1' nos "
+    "FATOS ⇒ diretrizes = as do cenário de origem MAIS "
+    '{"excluir_tarefas": ["abc-1"]}, sem nenhum outro ajuste novo. '
     "Além das diretrizes, escreva: resposta (1 a 3 frases confirmando o que "
     "mudou e o trade-off; se o pedido for impossível ou não fizer sentido "
     "com os FATOS, diga o porquê), nome (curto, derivado do cenário de "
