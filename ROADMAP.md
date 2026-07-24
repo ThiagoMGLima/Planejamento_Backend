@@ -41,6 +41,10 @@
 
 **Legenda:** ✅ feito · 🔜 próximo/ativo · ⏳ depois · 💡 decisão em aberto
 
+> **Este arquivo é o mapa do que falta.** Para o que **já está construído** — com os
+> arquivos onde cada coisa mora, e a lista do que ainda não existe — veja
+> **"Estado atual"** no `CLAUDE.md`.
+
 ---
 
 ## Método de trabalho (por task)

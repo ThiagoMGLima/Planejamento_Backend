@@ -40,12 +40,49 @@ O passo 7 existe porque **o contexto é zerado entre tasks**: cada uma fecha com
 as decisões de desenho, os bugs encontrados e como foram corrigidos, e o estado em
 que a próxima task começa. Índice em `docs/tasks/README.md`.
 
+Ainda no passo 7, atualize **"Estado atual"** logo abaixo e o status no
+`ROADMAP.md`. São 3 linhas e evitam o pior modo de falha deste projeto: um agente
+sem contexto reimplementando o que já existe, ou supondo que existe o que não
+existe.
+
 ### Onde olhar primeiro (agente sem contexto)
 
-1. `docs/tasks/README.md` — índice das notas, e qual é a task ativa.
-2. `ROADMAP.md` — a ordem das tasks e os princípios (o **nº 9** rege decisões de
+1. **"Estado atual"**, logo abaixo — o que já existe, para não reimplementar nem
+   supor o que não existe.
+2. `docs/tasks/README.md` — índice das notas, e qual é a task ativa.
+3. `ROADMAP.md` — a ordem das tasks e os princípios (o **nº 9** rege decisões de
    isolamento/segurança).
-3. O `contexto-*.md` da última task concluída — onde o trabalho parou e por quê.
+4. O `contexto-*.md` da última task concluída — onde o trabalho parou e por quê.
+
+### Estado atual — o que já está construído
+
+*Atualizado em 24/07/2026 (fim do PR1 da Fase 0B). **Mantenha esta seção viva:**
+ao fechar uma task, mova a linha de "não existe" para cá.*
+
+| Fase | Entrega | Onde |
+| --- | --- | --- |
+| **MVP** (marcos 1–4) ✅ | models, CRUD, recorrência via `rrule`, feriados, `status_efetivo` derivado, `concluir`/`remarcar`, testes + CI | `models.py`, `views.py`, `services/recurrence.py`, `services/completion.py` |
+| **A — Planejamento** ✅ | **solver** multitarefa (EDF guloso + anti-conflito + cascata de relaxamento) e camada de IA que emite **diretrizes** e re-roda o solver | `services/planejamento.py`, `services/planejamento_ia.py` |
+| **C — Rotina inteligente** ✅ | cenários com trade-offs + refino conversacional (C1b/C5), replanejar com diff (C2), fatores adaptativos por classe (C3), agente com tool use (C4/C7), estimativa de duração dos jobs (C6), feriados regionais (C8) | `services/cenarios.py`, `services/replanejamento.py`, `services/adaptacao.py`, `services/agente.py`, `services/tempos.py`, `services/holidays.py` |
+| **0B / PR0** ✅ | views finas: a regra saiu de `promover`/`planejar` para services; as ferramentas do agente passaram a chamar os services **em processo** (antes era HTTP contra a própria API) | `services/tarefas.py`, `services/agenda.py` |
+| **0B / PR1** ✅ | `Perfil`, FK `dono` nos 8 models-raiz, unicidade por-dono, **manager que recusa consulta sem escopo**, posse dos jobs assíncronos, seed de classes por perfil | `managers.py`, `services/perfis.py`, migrations `0007`–`0009` |
+
+**O que ainda NÃO existe** — não assuma nada disto:
+
+- **Autenticação.** Não há login, JWT, `request.user` nem `IsAuthenticated`. Quem
+  responde "de quem são os dados" é `services/perfis.perfil_do_request()`, e hoje
+  ela devolve sempre o perfil local. É a **única** função que o PR2 troca.
+- **Supabase.** Existe só em documentação — zero código, zero dependência.
+- **Conta demo e gate de pagamento** (`pode_usar`) — PR3. Os campos `plano` e
+  `trial_ate` do `Perfil` existem, mas nada os lê.
+- **Abstração `LLMProvider`** (0A.1) — `services/agente.py` já tem o padrão para a
+  forma multi-turno, mas 3 pontos ainda instanciam `ollama.Client` direto
+  (`planejamento_ia.py` e `cenarios.py` 2×).
+- **Hospedagem.** Roda só local, via compose.
+
+**Suíte:** 277 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
+— os únicos que provam isolamento, porque usam **dois** perfis; o resto roda com um
+só, onde "global" e "do dono" coincidem.
 
 ## Layout
 
