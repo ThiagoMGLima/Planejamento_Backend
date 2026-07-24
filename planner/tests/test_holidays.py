@@ -44,7 +44,7 @@ class _FakeResp:
         return self._dados
 
 
-def test_busca_e_cacheia(monkeypatch):
+def test_busca_e_cacheia(monkeypatch, perfil):
     chamadas = {"n": 0}
 
     def fake_get(url, timeout):
@@ -53,20 +53,20 @@ def test_busca_e_cacheia(monkeypatch):
 
     monkeypatch.setattr(holidays.requests, "get", fake_get)
 
-    primeiro = holidays.feriados_do_ano(2026)
-    segundo = holidays.feriados_do_ano(2026)
+    primeiro = holidays.feriados_do_ano(2026, perfil)
+    segundo = holidays.feriados_do_ano(2026, perfil)
 
     assert datetime.date(2026, 1, 1) in primeiro
     assert primeiro == segundo
     assert chamadas["n"] == 1  # segunda chamada veio do cache
 
 
-def test_degradacao_usa_cache_stale(monkeypatch):
+def test_degradacao_usa_cache_stale(monkeypatch, perfil):
     def ok(url, timeout):
         return _FakeResp([{"date": "2026-01-01"}])
 
     monkeypatch.setattr(holidays.requests, "get", ok)
-    holidays.feriados_do_ano(2026)  # popula fresco + stale
+    holidays.feriados_do_ano(2026, perfil)  # popula fresco + stale
 
     cache.delete("feriados:2026")  # expira só o cache fresco
 
@@ -74,7 +74,7 @@ def test_degradacao_usa_cache_stale(monkeypatch):
         raise RuntimeError("sem rede")
 
     monkeypatch.setattr(holidays.requests, "get", boom)
-    resultado = holidays.feriados_do_ano(2026)
+    resultado = holidays.feriados_do_ano(2026, perfil)
 
     assert datetime.date(2026, 1, 1) in resultado  # veio da cópia stale
 
@@ -86,25 +86,25 @@ def test_degradacao_nacional_retorna_vazio_sem_stale(_sem_rede):
 # --------------------------------------------------------------------------- #
 # Municipal (FeriadoLocal, Marco C8)                                           #
 # --------------------------------------------------------------------------- #
-def test_seed_curitiba_entra_no_merge(_sem_rede):
-    assert CURITIBA in holidays.feriados_do_ano(2026)
+def test_seed_curitiba_entra_no_merge(_sem_rede, perfil):
+    assert CURITIBA in holidays.feriados_do_ano(2026, perfil)
     # recorre todo ano (ano nulo na seed)
-    assert datetime.date(2031, 9, 8) in holidays.feriados_do_ano(2031)
+    assert datetime.date(2031, 9, 8) in holidays.feriados_do_ano(2031, perfil)
 
 
-def test_municipal_pontual_so_vale_no_ano(_sem_rede):
-    FeriadoLocal.objects.create(nome="Decretado", dia=2, mes=1, ano=2026)
-    assert datetime.date(2026, 1, 2) in holidays.feriados_do_ano(2026)
-    assert datetime.date(2027, 1, 2) not in holidays.feriados_do_ano(2027)
+def test_municipal_pontual_so_vale_no_ano(_sem_rede, perfil):
+    FeriadoLocal.objects.create(dono=perfil, nome="Decretado", dia=2, mes=1, ano=2026)
+    assert datetime.date(2026, 1, 2) in holidays.feriados_do_ano(2026, perfil)
+    assert datetime.date(2027, 1, 2) not in holidays.feriados_do_ano(2027, perfil)
 
 
-def test_municipal_29_de_fevereiro_pula_ano_nao_bissexto(_sem_rede):
-    FeriadoLocal.objects.create(nome="Bissexto", dia=29, mes=2)
-    assert datetime.date(2028, 2, 29) in holidays.feriados_do_ano(2028)
+def test_municipal_29_de_fevereiro_pula_ano_nao_bissexto(_sem_rede, perfil):
+    FeriadoLocal.objects.create(dono=perfil, nome="Bissexto", dia=29, mes=2)
+    assert datetime.date(2028, 2, 29) in holidays.feriados_do_ano(2028, perfil)
     # 2026 não é bissexto: a data não existe — pula sem levantar. (Sem igualdade
     # exata de conjunto: rodando com o stack de dev no ar, o web vivo pode
     # reescrever o cache de feriados nacionais entre o clear e o assert.)
-    r2026 = holidays.feriados_do_ano(2026)
+    r2026 = holidays.feriados_do_ano(2026, perfil)
     assert not any(f.month == 2 and f.day == 29 for f in r2026)
     assert CURITIBA in r2026
 
@@ -112,18 +112,18 @@ def test_municipal_29_de_fevereiro_pula_ano_nao_bissexto(_sem_rede):
 # --------------------------------------------------------------------------- #
 # Estadual (FERIADOS_UF via lib offline, Marco C8)                             #
 # --------------------------------------------------------------------------- #
-def test_estadual_por_uf(_sem_rede, settings):
+def test_estadual_por_uf(_sem_rede, settings, perfil):
     settings.FERIADOS_UF = "SP"
     # 9 de julho (Revolução Constitucionalista) é feriado estadual de SP.
-    assert datetime.date(2026, 7, 9) in holidays.feriados_do_ano(2026)
+    assert datetime.date(2026, 7, 9) in holidays.feriados_do_ano(2026, perfil)
 
 
-def test_estadual_desligado_por_padrao(_sem_rede, settings):
+def test_estadual_desligado_por_padrao(_sem_rede, settings, perfil):
     settings.FERIADOS_UF = ""
-    assert datetime.date(2026, 7, 9) not in holidays.feriados_do_ano(2026)
+    assert datetime.date(2026, 7, 9) not in holidays.feriados_do_ano(2026, perfil)
 
 
-def test_estadual_uf_invalida_degrada_sem_excecao(_sem_rede, settings):
+def test_estadual_uf_invalida_degrada_sem_excecao(_sem_rede, settings, perfil):
     settings.FERIADOS_UF = "XX"
-    resultado = holidays.feriados_do_ano(2026)  # não levanta
+    resultado = holidays.feriados_do_ano(2026, perfil)  # não levanta
     assert CURITIBA in resultado  # as demais camadas seguem de pé

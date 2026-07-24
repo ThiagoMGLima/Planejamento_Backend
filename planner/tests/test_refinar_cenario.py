@@ -12,6 +12,7 @@ import pytest
 from django.core.cache import cache as django_cache
 from rest_framework.test import APIClient
 
+from planner import views
 from planner.services import planejamento as P
 from planner.services.planejamento_ia import OllamaIndisponivel, validar_diretrizes
 
@@ -68,13 +69,13 @@ def test_validar_diretrizes_excluir_todas_e_descartado():
 
 
 @pytest.mark.django_db
-def test_montar_plano_excluir_tarefas_mantem_horizonte():
+def test_montar_plano_excluir_tarefas_mantem_horizonte(perfil):
     perto = TarefaFactory(esforco_estimado=120, deadline=aware(2026, 6, 2, 18))
     longe = TarefaFactory(esforco_estimado=120, deadline=aware(2026, 6, 5, 18))
-    validas, _ = P.validar_tarefas([perto.id, longe.id])
-    base = P.montar_plano(validas, SEG, {})
+    validas, _ = P.validar_tarefas(perfil, [perto.id, longe.id])
+    base = P.montar_plano(perfil, validas, SEG, {})
 
-    res = P.montar_plano(validas, SEG, {}, {"excluir_tarefas": [str(longe.id)]})
+    res = P.montar_plano(perfil, validas, SEG, {}, {"excluir_tarefas": [str(longe.id)]})
     assert {s.tarefa_id for s in res.sessoes} == {str(perto.id)}
     assert {te.id for te in res.tarefas} == {str(perto.id)}
     # Horizonte do conjunto completo: métricas comparáveis com o base.
@@ -83,10 +84,10 @@ def test_montar_plano_excluir_tarefas_mantem_horizonte():
 
 
 @pytest.mark.django_db
-def test_montar_plano_excluir_todas_ignora_a_exclusao():
+def test_montar_plano_excluir_todas_ignora_a_exclusao(perfil):
     t = TarefaFactory(esforco_estimado=60, deadline=aware(2026, 6, 2, 18))
-    validas, _ = P.validar_tarefas([t.id])
-    res = P.montar_plano(validas, SEG, {}, {"excluir_tarefas": [str(t.id)]})
+    validas, _ = P.validar_tarefas(perfil, [t.id])
+    res = P.montar_plano(perfil, validas, SEG, {}, {"excluir_tarefas": [str(t.id)]})
     assert res.sessoes  # cinto de segurança: plano nunca esvazia
 
 
@@ -225,7 +226,7 @@ def test_escolher_funciona_no_cenario_refinado(api, eager, settings):
 
 
 @pytest.mark.django_db
-def test_refinar_valida_job_cenario_e_lote_antigo(api, eager, settings):
+def test_refinar_valida_job_cenario_e_lote_antigo(api, eager, settings, perfil):
     resp = _refinar(api, "nao-existe")
     assert resp.status_code == 404
 
@@ -238,7 +239,10 @@ def test_refinar_valida_job_cenario_e_lote_antigo(api, eager, settings):
     resp = _refinar(api, job_id, mensagem="")
     assert resp.status_code == 400
 
-    # Lote gerado antes do C5 (sem `entrada`) não é refinável.
+    # Lote gerado antes do C5 (sem `entrada`) não é refinável. O lote é posto
+    # no cache à mão, então a posse também precisa ser registrada: a verificação
+    # de dono vem antes de tudo, e sem ela a resposta seria 404 (PR1).
     django_cache.set("cenarios_job:legado", {"cenarios": [{"id": "base"}]}, 60)
+    views._registrar_dono_job("legado", perfil)
     resp = _refinar(api, "legado")
     assert resp.status_code == 409

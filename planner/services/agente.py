@@ -7,10 +7,11 @@ TROCÁVEL: `AGENTE_PROVIDER` escolhe entre o Ollama local (mesma infra da Fase A
 fraco para agência multi-turno) e uma API remota (Anthropic) — solver, dados e
 ferramentas seguem 100% locais.
 
-Camada de ferramentas: reusa os MESMOS contratos HTTP validados que o MCP server
-embrulha (`mcp_server/server.py`) — chamadas `requests` à API local
-(`API_BASE_URL`), sem lógica de domínio aqui. O solver continua a fonte de
-verdade; o agente só orquestra.
+Camada de ferramentas: chamadas **em processo** aos services (PR0 da Fase 0B —
+antes era `requests` contra a própria API). Sem lógica de domínio aqui: o solver
+continua a fonte de verdade e o agente só orquestra. Os contratos das ferramentas
+são os mesmos que o MCP server embrulha (`mcp_server/server.py`) — o que mudou é
+o transporte, não a forma.
 
 Degrada como os irmãos (planejar-ia, cenários): provider fora/sem credencial/
 timeout/resposta não-parseável ⇒ `AgenteIndisponivel`, e a task devolve uma
@@ -21,9 +22,19 @@ import json
 from collections import namedtuple
 from datetime import datetime, timedelta
 
-import requests
 from django.conf import settings
 from django.utils import timezone
+
+from planner.models import Classe
+from planner.services import (
+    agenda,
+    aplicacao,
+    completion,
+    planejamento,
+    replanejamento,
+    tarefas,
+)
+from planner.services.planejamento import HORIZONTES
 
 
 class AgenteIndisponivel(Exception):
@@ -42,139 +53,162 @@ DIAS_PT = [
 
 
 # --------------------------------------------------------------------------- #
-# 1. Camada de ferramentas — mesmos contratos HTTP do MCP server              #
+# 1. Camada de ferramentas — chamadas EM PROCESSO aos services                 #
 # --------------------------------------------------------------------------- #
-def _api(metodo, caminho, corpo=None, params=None):
-    """Chama a API local e devolve o corpo. Erro (HTTP/rede) vira dict — o agente
-    lê o motivo e se recupera, em vez de estourar o loop."""
-    url = f"{settings.API_BASE_URL.rstrip('/')}{caminho}"
-    try:
-        resp = requests.request(metodo, url, json=corpo, params=params, timeout=60)
-    except requests.RequestException as e:
-        return {"erro": "rede", "detalhe": str(e)}
-    try:
-        dados = resp.json()
-    except ValueError:
-        dados = {"detalhe": resp.text}
-    if resp.status_code >= 400:
-        return {"erro": resp.status_code, "detalhe": dados}
-    return dados
+# Até o PR0 da Fase 0B isto era `requests` contra a própria API (`API_BASE_URL`):
+# código Django saindo pela rede para chegar onde já estava, atravessando auth,
+# serialização e o ciclo de request. Com contas (Fase 0B) aquilo tomaria 401, e
+# "resolver" significaria pôr credencial de usuário na fila do Celery. Chamando
+# os services direto, o problema deixa de existir — e é mais rápido.
+#
+# O MCP server (`mcp_server/`) continua HTTP: é container separado servindo
+# clientes externos, onde a fronteira é legítima.
+#
+# Contrato preservado: em erro, a ferramenta devolve `{"erro": ..., "detalhe":
+# ...}` em vez de levantar. O loop lê o motivo e se recupera no turno seguinte.
+def _erro(codigo, detalhe):
+    return {"erro": codigo, "detalhe": detalhe}
 
 
-def _listar_classes():
+# Toda ferramenta recebe `dono` como PRIMEIRO PARÂMETRO POSICIONAL, e o dispatch
+# o passa por fora do `**tc.args` (Fase 0B, PR1). É estrutural, não convenção: os
+# argumentos que o modelo escolhe e a identidade de quem está conversando chegam
+# por caminhos diferentes, então nenhuma saída do LLM — alucinada ou induzida por
+# texto na conversa — consegue trocar o dono dos dados.
+def _listar_classes(dono):
     """Classes de atividade (id, nome). Use o id em criar_tarefa."""
-    r = _api("GET", "/classes/")
-    return r["results"] if isinstance(r, dict) and "results" in r else r
+    return [
+        {"id": str(c.id), "nome": c.nome}
+        for c in Classe.objects.do_dono(dono).order_by("nome")
+    ]
 
 
 def _criar_tarefa(
-    titulo, classe_id=None, deadline=None, esforco_min=None, descricao=""
+    dono, titulo, classe_id=None, deadline=None, esforco_min=None, descricao=""
 ):
-    corpo = {"titulo": titulo, "descricao": descricao}
-    if classe_id is not None:
-        corpo["classe_id"] = classe_id
+    prazo = None
     if deadline is not None:
-        corpo["deadline"] = _normalizar_deadline(deadline)
-    if esforco_min is not None:
-        corpo["esforco_estimado"] = esforco_min
-    resultado = _api("POST", "/tarefas/", corpo=corpo)
-    # Erro acionável (E2E com o 7B): quando o modelo chuta um classe_id que não
-    # existe, devolver as classes reais junto do erro permite que ele corrija a
-    # chamada no turno seguinte, em vez de desistir com "problema técnico".
-    if (
-        isinstance(resultado, dict)
-        and "erro" in resultado
-        and isinstance(resultado.get("detalhe"), dict)
-        and "classe_id" in resultado["detalhe"]
-    ):
-        resultado["classes_disponiveis"] = _listar_classes()
-        resultado["dica"] = (
-            "classe_id deve ser um id (UUID) de classes_disponiveis; "
-            "repita criar_tarefa com o id correto."
+        prazo = _normalizar_deadline(deadline)
+        if prazo is None:
+            return _erro(
+                400,
+                {
+                    "deadline": [
+                        f"{deadline!r} não é uma data ISO (use YYYY-MM-DDTHH:MM)."
+                    ]
+                },
+            )
+    try:
+        tarefa = tarefas.criar(
+            dono,
+            titulo=titulo,
+            classe_id=classe_id,
+            deadline=prazo,
+            esforco_min=esforco_min,
+            descricao=descricao,
         )
-    return resultado
+    except tarefas.ClasseDesconhecida as e:
+        # Erro acionável (E2E com o 7B): quando o modelo chuta um classe_id que
+        # não existe, devolver as classes reais junto do erro permite que ele
+        # corrija a chamada no turno seguinte, em vez de desistir com "problema
+        # técnico".
+        return {
+            **_erro(400, {"classe_id": [str(e)]}),
+            "classes_disponiveis": _listar_classes(dono),
+            "dica": (
+                "classe_id deve ser um id (UUID) de classes_disponiveis; "
+                "repita criar_tarefa com o id correto."
+            ),
+        }
+    except (ValueError, TypeError) as e:
+        return _erro(400, str(e))
+    return {
+        "id": str(tarefa.id),
+        "titulo": tarefa.titulo,
+        "classe": tarefa.classe.nome if tarefa.classe else None,
+        "deadline": tarefa.deadline.isoformat() if tarefa.deadline else None,
+        "esforco_estimado": tarefa.esforco_estimado,
+    }
 
 
-def _listar_pendentes():
+def _listar_pendentes(dono):
     """Pendentes pré-digeridos (mesma razão da agenda: o modelo copia)."""
-    r = _api("GET", "/pendentes")
-    if not isinstance(r, list):
-        return r
-    digerido = []
-    for ev in r:
-        item = {"evento_id": ev.get("id"), "titulo": ev.get("titulo")}
-        try:
-            venceu = timezone.localtime(datetime.fromisoformat(str(ev["fim"])))
-            item["venceu_em"] = venceu.strftime("%Y-%m-%d %H:%M")
-        except (KeyError, ValueError, TypeError):
-            pass
-        item["classe"] = (ev.get("classe") or {}).get("nome")
-        digerido.append(item)
-    return digerido
+    return [
+        {
+            "evento_id": str(ev.id),
+            "titulo": ev.titulo,
+            "venceu_em": timezone.localtime(ev.fim).strftime("%Y-%m-%d %H:%M"),
+            "classe": ev.classe.nome if ev.classe else None,
+        }
+        for ev in agenda.pendentes(dono, timezone.now())
+    ]
 
 
 def _normalizar_deadline(valor):
     """O usuário fala hora LOCAL; o 7B às vezes escreve a hora literal com Z
     ("17h" → 17:00Z = 14h local — visto no E2E). Regra do app single-user:
     naive ou UTC-zero = hora de parede local (o 7B nunca converte fuso de
-    verdade); offset explícito não-zero é respeitado. Não-ISO passa reto."""
+    verdade); offset explícito não-zero é respeitado.
+
+    Devolve datetime tz-aware, ou None se não for ISO — antes do PR0 o valor
+    cru passava reto e quem recusava era a API; agora quem recusa é a
+    ferramenta, com a mesma mensagem acionável."""
     try:
         dt = datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
     except (ValueError, TypeError):
-        return valor
+        return None
     if dt.tzinfo is None:
-        return timezone.make_aware(dt).isoformat()
+        return timezone.make_aware(dt)
     if dt.utcoffset() and dt.utcoffset().total_seconds() != 0:
-        return valor
-    return timezone.make_aware(dt.replace(tzinfo=None)).isoformat()
+        return dt
+    return timezone.make_aware(dt.replace(tzinfo=None))
 
 
 def _normalizar_janela(valor, eh_fim=False):
     """Aceita o que o modelo mandar ("2026-07-06", "...T00:00", com/sem offset)
-    e devolve o tz-aware que a API exige. Data pura como fim = fim do dia.
-    Valor não-ISO passa reto — a API valida e devolve o motivo."""
+    e devolve o datetime tz-aware. Data pura como fim = fim do dia.
+    Valor não-ISO devolve None — quem chama transforma em erro legível."""
     try:
         dt = datetime.fromisoformat(str(valor))
     except (ValueError, TypeError):
-        return valor
+        return None
     if eh_fim and len(str(valor)) == 10:  # só a data: janela até 23:59
         dt = dt.replace(hour=23, minute=59)
     if dt.tzinfo is None:
         dt = timezone.make_aware(dt)
-    return dt.isoformat()
+    return dt
 
 
-def _consultar_agenda(inicio, fim):
+def _consultar_agenda(dono, inicio, fim):
     """Agenda PRÉ-DIGERIDA: dias com eventos, horários locais hh:mm, campos
     mínimos. O payload cru da API (UTC, dezenas de campos) fazia o 7B alucinar
     o resumo — chamava a ferramenta certa e narrava outra semana. Entregar o
     resumo pronto reduz a tarefa do modelo a copiar (e corta tokens: mais
     rápido e mais barato de contexto)."""
-    r = _api(
-        "GET",
-        "/eventos/",
-        params={
-            "inicio": _normalizar_janela(inicio),
-            "fim": _normalizar_janela(fim, eh_fim=True),
-        },
-    )
-    if not isinstance(r, list):
-        return r
+    ini_dt = _normalizar_janela(inicio)
+    fim_dt = _normalizar_janela(fim, eh_fim=True)
+    if ini_dt is None or fim_dt is None:
+        return _erro(400, "inicio/fim devem ser datas ISO (YYYY-MM-DD ou completo).")
+
+    try:
+        itens = agenda.eventos_na_janela(dono, ini_dt, fim_dt)
+    except agenda.JanelaInvalida as e:
+        return _erro(400, str(e))
+
     dias = {}
-    for ev in r:
-        try:
-            ini = timezone.localtime(datetime.fromisoformat(str(ev["inicio"])))
-            fim_ev = timezone.localtime(datetime.fromisoformat(str(ev["fim"])))
-        except (KeyError, ValueError, TypeError):
-            continue  # payload inesperado: melhor omitir que intoxicar o modelo
+    for item in itens:
+        ev = item.evento
+        ini = timezone.localtime(agenda.inicio_efetivo(item))
+        fim_ev = timezone.localtime(item.ocorrencia.fim if item.ocorrencia else ev.fim)
+        alvo = item.ocorrencia or ev
         dias.setdefault(ini.date(), []).append(
             {
-                "evento_id": ev.get("id"),
-                "titulo": ev.get("titulo"),
+                "evento_id": str(ev.id),
+                "titulo": ev.titulo,
                 "inicio": ini.strftime("%H:%M"),
                 "fim": fim_ev.strftime("%H:%M"),
-                "classe": (ev.get("classe") or {}).get("nome"),
-                "status": ev.get("status_efetivo") or ev.get("status"),
+                "classe": ev.classe.nome if ev.classe else None,
+                "status": completion.status_efetivo(alvo) or alvo.status,
             }
         )
     return [
@@ -187,27 +221,60 @@ def _consultar_agenda(inicio, fim):
     ]
 
 
-def _simular_plano(tarefa_ids, preferencias=None, horizonte=None, a_partir_de=None):
-    corpo = {"tarefa_ids": tarefa_ids}
-    if preferencias:
-        corpo["preferencias"] = preferencias
-    if horizonte:
-        corpo["horizonte"] = horizonte
-    if a_partir_de:
-        corpo["a_partir_de"] = a_partir_de
-    return _api("POST", "/planejamento/calcular", corpo=corpo)
+def _simular_plano(
+    dono, tarefa_ids, preferencias=None, horizonte=None, a_partir_de=None
+):
+    """What-if: roda o solver e NÃO persiste (mesmo contrato de /calcular)."""
+    validas, invalidas = planejamento.validar_tarefas(dono, tarefa_ids)
+    if invalidas:
+        return _erro(422, {"tarefas_invalidas": invalidas})
 
+    agora = _normalizar_janela(a_partir_de) if a_partir_de else timezone.now()
+    if agora is None:
+        return _erro(400, "a_partir_de deve ser uma data ISO.")
 
-def _replanejar(dias_bloqueados=None, preferencias=None, aplicar=False):
-    corpo = {}
-    if dias_bloqueados:
-        corpo["dias_bloqueados"] = dias_bloqueados
-    if preferencias:
-        corpo["preferencias"] = preferencias
-    caminho = (
-        "/planejamento/replanejar/aplicar" if aplicar else "/planejamento/replanejar"
+    res = planejamento.montar_plano(
+        dono,
+        validas,
+        agora,
+        preferencias or {},
+        horizonte_dias=HORIZONTES.get(horizonte) if horizonte else None,
     )
-    return _api("POST", caminho, corpo=corpo)
+    return planejamento.serializar_plano(res)
+
+
+def _replanejar(dono, dias_bloqueados=None, preferencias=None, aplicar=False):
+    """Replaneja do agora em diante. `aplicar=False` só simula (plano + diff)."""
+    agora = timezone.now()
+    try:
+        if aplicar:
+            rp, criados, removidos = replanejamento.aplicar_replanejamento(
+                dono,
+                agora=agora,
+                dias_bloqueados=dias_bloqueados,
+                preferencias=preferencias or {},
+            )
+            return {
+                "diff": rp.diff,
+                "eventos_criados": criados,
+                "eventos_removidos": removidos,
+                "metricas": rp.metricas,
+                "metricas_vs_anterior": rp.metricas_vs_anterior,
+            }
+        rp = replanejamento.replanejar(
+            dono,
+            agora=agora,
+            dias_bloqueados=dias_bloqueados,
+            preferencias=preferencias or {},
+        )
+    except aplicacao.AplicacaoInvalida as e:
+        return _erro(400, e.erros)
+    return {
+        "plano": planejamento.serializar_plano(rp.res),
+        "diff": rp.diff,
+        "metricas": rp.metricas,
+        "metricas_vs_anterior": rp.metricas_vs_anterior,
+    }
 
 
 # Registro: cada ferramenta declara nome, descrição, JSON Schema dos parâmetros,
@@ -484,14 +551,17 @@ def _criar_provider(historico, mensagem):
 # --------------------------------------------------------------------------- #
 # 3. Loop de tool-use — provider-agnóstico                                     #
 # --------------------------------------------------------------------------- #
-def conversar(mensagem, contexto, historico=None):
-    """Um turno de conversa. Roda o loop de tool-use e devolve
-    `{resposta, acoes, mudou_estado, ia_indisponivel}`.
+def conversar(dono, mensagem, contexto, historico=None):
+    """Um turno de conversa, no escopo de um perfil. Roda o loop de tool-use e
+    devolve `{resposta, acoes, mudou_estado, ia_indisponivel}`.
 
     `contexto` (data de hoje, seleção atual, etc.) entra como FATOS no início do
     pedido — o agente resolve "sexta"/"meu sábado" a partir daí, não inventa.
     `historico` é a conversa anterior (lista {role, content}, só texto).
     Levanta `AgenteIndisponivel` se o cérebro estiver fora/desligado.
+
+    O `dono` **não** entra nos FATOS nem no prompt: ele fica fora do alcance do
+    modelo e é aplicado no dispatch das ferramentas.
     """
     if not settings.AGENTE_ENABLED:
         raise AgenteIndisponivel("agente desligado")
@@ -502,11 +572,11 @@ def conversar(mensagem, contexto, historico=None):
     # questão de copiar, não de agência.
     fatos = dict(contexto or {})
     if "classes" not in fatos:
-        classes = _listar_classes()
-        if isinstance(classes, list):  # erro de rede/API ⇒ segue sem, como antes
-            fatos["classes"] = [
-                {"id": c.get("id"), "nome": c.get("nome")} for c in classes
-            ]
+        # Antes do PR0 isto era uma chamada HTTP que podia falhar, e havia um
+        # guarda para "segue sem as classes". Em processo, falha aqui é o banco
+        # fora — não há degradação útil: a task inteira cai e o endpoint já
+        # responde com `ia_indisponivel`.
+        fatos["classes"] = _listar_classes(dono)
     # Data é aritmética, não agência: o 7B erra "segunda que vem" contando nos
     # dedos (e ignorava a tabela genérica de dias). O dicionário usa as MESMAS
     # palavras que o usuário diria como chave — a resolução vira busca literal.
@@ -543,7 +613,9 @@ def conversar(mensagem, contexto, historico=None):
                 )
                 continue
             try:
-                saida = ferr["executar"](**tc.args)
+                # `dono` posicional, `tc.args` desempacotado: o que o modelo
+                # escolheu nunca chega perto de decidir de quem são os dados.
+                saida = ferr["executar"](dono, **tc.args)
             except TypeError as e:  # argumentos que não batem com a assinatura
                 saida = {"erro": "argumentos inválidos", "detalhe": str(e)}
             ok = not (isinstance(saida, dict) and "erro" in saida)

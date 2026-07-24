@@ -44,6 +44,7 @@ def _reabrir_ou_recriar_tarefa(evento):
 
     esforco = int((evento.fim - evento.inicio).total_seconds() // 60)
     return Tarefa.objects.create(
+        dono=evento.dono,
         titulo=evento.titulo,
         descricao=evento.descricao,
         classe=evento.classe,
@@ -55,6 +56,9 @@ def _reabrir_ou_recriar_tarefa(evento):
 def _registrar_execucao(evento, remarcado, real_min=None):
     """Grava o histórico cru (Marco C3) — insumo dos fatores adaptativos."""
     RegistroExecucao.objects.create(
+        # `tarefa`/`evento`/`classe` são SET_NULL: apagados, o registro ficaria
+        # sem caminho até o dono. Por isso ele é copiado, não derivado na leitura.
+        dono=evento.dono,
         tarefa=evento.origem_tarefa,
         evento=evento,
         classe=evento.classe,

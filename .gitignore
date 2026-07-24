@@ -8,6 +8,7 @@ dist/
 
 # Ambiente
 .env
+docker-compose.override.yml
 .venv/
 venv/
 env/

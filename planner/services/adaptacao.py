@@ -50,26 +50,28 @@ JANELA_FLEXIBILIDADE = timedelta(days=90)
 # --------------------------------------------------------------------------- #
 # Pesos de preferência (escolha revelada)                                      #
 # --------------------------------------------------------------------------- #
-def pesos_atuais():
-    """Dict métrica → peso, com neutro (1.0) para o que nunca foi aprendido."""
-    salvos = dict(PesoPreferencia.objects.values_list("metrica", "valor"))
+def pesos_atuais(dono):
+    """Dict métrica → peso do perfil, neutro (1.0) para o que nunca foi aprendido."""
+    salvos = dict(PesoPreferencia.objects.do_dono(dono).values_list("metrica", "valor"))
     return {m: float(salvos.get(m, PESO_NEUTRO)) for m in METRICAS}
 
 
-def decair_pesos():
+def decair_pesos(dono):
     """w ← w + λ·(1.0 − w), aplicado ao ler (sem cron). Retorna os pesos novos.
 
     Gostos antigos não viram âncora eterna: cada leitura puxa 2% de volta ao
     neutro; o EWMA das escolhas novas reafirma o que continua valendo.
     """
     novos = {}
-    for m, w in pesos_atuais().items():
+    for m, w in pesos_atuais(dono).items():
         if w == PESO_NEUTRO:
             novos[m] = w
             continue
         novos[m] = round(w + LAMBDA_DECAIMENTO * (PESO_NEUTRO - w), 4)
-        PesoPreferencia.objects.update_or_create(
-            metrica=m, defaults={"valor": novos[m]}
+        # `dono` também nos lookups: o queryset escopado filtra, mas os campos
+        # de criação saem daqui — sem ele, o insert nasceria sem dono.
+        PesoPreferencia.objects.do_dono(dono).update_or_create(
+            dono=dono, metrica=m, defaults={"valor": novos[m]}
         )
     return novos
 
@@ -80,8 +82,11 @@ def atualizar_pesos(escolha):
     Para cada métrica: Δ = métrica normalizada do escolhido − média dos
     rejeitados; w ← clamp(w + ALFA·Δ, PESO_MIN, PESO_MAX). Escolha sem
     rejeitados (lote de 1) não ensina nada.
+
+    O dono vem da própria escolha — aprender é sempre sobre quem escolheu.
     """
-    pesos = pesos_atuais()
+    dono = escolha.dono
+    pesos = pesos_atuais(dono)
     exibidos = escolha.lote or []
     escolhido = next((c for c in exibidos if c["id"] == escolha.escolhido), None)
     rejeitados = [c for c in exibidos if c["id"] != escolha.escolhido]
@@ -96,8 +101,8 @@ def atualizar_pesos(escolha):
         delta = escolhido["metricas_vs_base"][m] - media_rejeitados
         valor = min(PESO_MAX, max(PESO_MIN, pesos[m] + ALFA * delta))
         novos[m] = round(valor, 4)
-        PesoPreferencia.objects.update_or_create(
-            metrica=m, defaults={"valor": novos[m]}
+        PesoPreferencia.objects.do_dono(dono).update_or_create(
+            dono=dono, metrica=m, defaults={"valor": novos[m]}
         )
     return novos
 
@@ -105,7 +110,7 @@ def atualizar_pesos(escolha):
 # --------------------------------------------------------------------------- #
 # Fatores por classe (C3) — do RegistroExecucao                                #
 # --------------------------------------------------------------------------- #
-def fator_classe(classe_id):
+def fator_classe(dono, classe_id):
     """EWMA de real/planejado da classe (α=0.3). Cacheado (TTL curto).
 
     Regras: mínimo FATOR_MIN_AMOSTRAS registros com `real_min` (senão 1.0);
@@ -113,7 +118,9 @@ def fator_classe(classe_id):
     """
     if classe_id is None:
         return 1.0
-    chave = f"fator_classe:{classe_id}"
+    # O dono entra na chave mesmo com `classe_id` sendo UUID: hoje a separação
+    # depende de o UUID ser imprevisível, o que é obscuridade e não fronteira.
+    chave = f"fator_classe:{dono.id}:{classe_id}"
     hit = cache.get(chave)
     if hit is not None:
         return hit
@@ -121,9 +128,8 @@ def fator_classe(classe_id):
     try:
         razoes = [
             r / p
-            for r, p in RegistroExecucao.objects.filter(
-                classe_id=classe_id, real_min__isnull=False, planejado_min__gt=0
-            )
+            for r, p in RegistroExecucao.objects.do_dono(dono)
+            .filter(classe_id=classe_id, real_min__isnull=False, planejado_min__gt=0)
             .order_by("criado_em")
             .values_list("real_min", "planejado_min")
         ]
@@ -142,7 +148,7 @@ def fator_classe(classe_id):
     return fator
 
 
-def flexibilidade_classe(classe_id):
+def flexibilidade_classe(dono, classe_id):
     """Taxa de remarcação (0..1) da classe nos últimos 90 dias.
 
     Alta ⇒ classe elástica (candidata preferencial a mover em cenários e
@@ -152,9 +158,14 @@ def flexibilidade_classe(classe_id):
     if classe_id is None:
         return 0.0
     try:
-        registros = RegistroExecucao.objects.filter(
-            classe_id=classe_id, criado_em__gte=timezone.now() - JANELA_FLEXIBILIDADE
-        ).values_list("remarcado", flat=True)
+        registros = (
+            RegistroExecucao.objects.do_dono(dono)
+            .filter(
+                classe_id=classe_id,
+                criado_em__gte=timezone.now() - JANELA_FLEXIBILIDADE,
+            )
+            .values_list("remarcado", flat=True)
+        )
     except (ValueError, TypeError, ValidationError):
         return 0.0
     registros = list(registros)

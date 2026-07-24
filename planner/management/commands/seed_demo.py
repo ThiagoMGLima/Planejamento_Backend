@@ -32,10 +32,12 @@ from planner.models import (
     Classe,
     Evento,
     Ocorrencia,
+    Perfil,
     RegistroExecucao,
     RegraRecorrencia,
     Tarefa,
 )
+from planner.services import perfis
 
 # Dias da semana no padrão do projeto (0=seg … 6=dom).
 SEG, TER, QUA, QUI, SEX, SAB = 0, 1, 2, 3, 4, 5
@@ -50,15 +52,25 @@ class Command(BaseCommand):
             action="store_true",
             help="Apaga tarefas/eventos/ocorrências/registros antes (mantém as classes).",
         )
+        parser.add_argument(
+            "--dono",
+            default=None,
+            help=(
+                "E-mail do perfil a semear. Ausente: o perfil local. O seed "
+                "escreve SEMPRE num perfil só — inclusive o --clear."
+            ),
+        )
 
     def handle(self, *args, **options):
-        classes = {c.nome: c for c in Classe.objects.all()}
+        self.dono = self._resolver_dono(options["dono"])
+        classes = {c.nome: c for c in Classe.objects.do_dono(self.dono)}
         faltando = {"Aula", "Tarefas básicas", "Estudar", "Prova", "Trabalho"} - set(
             classes
         )
         if faltando:
             raise CommandError(
-                f"Classes padrão ausentes: {sorted(faltando)}. Rode as migrations."
+                f"Classes padrão ausentes em {self.dono}: {sorted(faltando)}. "
+                "Rode as migrations (ou crie o perfil pelo app, que já as semeia)."
             )
 
         with transaction.atomic():
@@ -75,6 +87,16 @@ class Command(BaseCommand):
 
         self._resumo(tarefas, n_ev, n_oc, n_reg)
 
+    @staticmethod
+    def _resolver_dono(email):
+        """Perfil alvo do seed. Sem `--dono`, o local — o mesmo de sempre."""
+        if email is None:
+            return perfis.perfil_local()
+        try:
+            return Perfil.objects.get(email=email)
+        except Perfil.DoesNotExist:
+            raise CommandError(f"Perfil não encontrado: {email}")
+
     # ------------------------------------------------------------------ #
     # Helpers de data                                                    #
     # ------------------------------------------------------------------ #
@@ -87,15 +109,16 @@ class Command(BaseCommand):
     # Limpeza                                                            #
     # ------------------------------------------------------------------ #
     def _limpar(self):
-        n_reg = RegistroExecucao.objects.count()
-        n_oc = Ocorrencia.objects.count()
-        n_ev = Evento.objects.count()
-        n_tar = Tarefa.objects.count()
+        # Só do perfil semeado: `--clear` nunca toca nos dados de outra conta.
+        n_reg = RegistroExecucao.objects.do_dono(self.dono).count()
+        n_oc = Ocorrencia.objects.filter(evento__dono=self.dono).count()
+        n_ev = Evento.objects.do_dono(self.dono).count()
+        n_tar = Tarefa.objects.do_dono(self.dono).count()
         # Ocorrências caem por CASCADE ao apagar eventos; regras ficam órfãs.
-        RegistroExecucao.objects.all().delete()
-        Evento.objects.all().delete()
-        RegraRecorrencia.objects.all().delete()
-        Tarefa.objects.all().delete()
+        RegistroExecucao.objects.do_dono(self.dono).delete()
+        Evento.objects.do_dono(self.dono).delete()
+        RegraRecorrencia.objects.do_dono(self.dono).delete()
+        Tarefa.objects.do_dono(self.dono).delete()
         self.stdout.write(
             self.style.WARNING(
                 f"--clear: removidos {n_tar} tarefas, {n_ev} eventos, "
@@ -260,6 +283,7 @@ class Command(BaseCommand):
         criadas = {}
         for titulo, classe, deadline, esforco, status in specs:
             criadas[titulo] = Tarefa.objects.create(
+                dono=self.dono,
                 titulo=titulo,
                 descricao="",
                 classe=classe,
@@ -290,6 +314,7 @@ class Command(BaseCommand):
             nonlocal n_ev
             n_ev += 1
             return Evento.objects.create(
+                dono=self.dono,
                 titulo=titulo,
                 descricao="",
                 inicio=inicio,
@@ -303,6 +328,7 @@ class Command(BaseCommand):
 
         def recorrente(titulo, classe, dia_base, h_ini, h_fim, dias, *, feriados=True):
             regra = RegraRecorrencia.objects.create(
+                dono=self.dono,
                 tipo=RegraRecorrencia.Tipo.SEMANAL,
                 dias=dias,
                 ignorar_feriados=feriados,
@@ -354,7 +380,10 @@ class Command(BaseCommand):
             day=1
         )
         r_reuniao = RegraRecorrencia.objects.create(
-            tipo=RegraRecorrencia.Tipo.MENSAL, dias=[1], ignorar_feriados=False
+            dono=self.dono,
+            tipo=RegraRecorrencia.Tipo.MENSAL,
+            dias=[1],
+            ignorar_feriados=False,
         )
         evento(
             "Reunião do grupo de pesquisa",
@@ -585,6 +614,7 @@ class Command(BaseCommand):
         ]
         for classe, planejado, real, remarcado, dias in specs:
             RegistroExecucao.objects.create(
+                dono=self.dono,
                 classe=classe,
                 planejado_min=planejado,
                 real_min=real,

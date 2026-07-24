@@ -107,7 +107,13 @@ def _resultado(tarefas, agora=SEG, horizonte=None, prefs_entrada=None):
     prefs, usadas = P.montar_preferencias(prefs_entrada or {})
     horizonte = horizonte or max(t.deadline for t in tarefas)
     sessoes, nao = P.calcular_plano(tarefas, [], prefs, agora, horizonte)
-    return P.ResultadoPlano(sessoes, nao, prefs, usadas, tarefas, [], agora, horizonte)
+    # `dono=None` explícito: estes testes exercitam matemática pura (métricas,
+    # normalização), que não toca o banco. O ResultadoPlano exige o dono para
+    # que um plano de verdade nunca nasça sem ele — aqui o None é a declaração
+    # de que não há plano de verdade nenhum.
+    return P.ResultadoPlano(
+        sessoes, nao, prefs, usadas, tarefas, [], agora, horizonte, dono=None
+    )
 
 
 def test_metricas_do_plano_valores_grounded():
@@ -227,8 +233,9 @@ def test_pontuar_ordena_sugere_e_garante_diversidade():
 # --------------------------------------------------------------------------- #
 # Aprendizado de pesos (EWMA)                                                  #
 # --------------------------------------------------------------------------- #
-def _escolha(escolhido, lote):
+def _escolha(perfil, escolhido, lote):
     return EscolhaCenario.objects.create(
+        dono=perfil,
         lote=lote,
         escolhido=escolhido,
         era_sugerido=False,
@@ -242,9 +249,9 @@ def _item(cid, **vs_base):
 
 
 @pytest.mark.django_db
-def test_atualizar_pesos_move_na_direcao_da_escolha():
+def test_atualizar_pesos_move_na_direcao_da_escolha(perfil):
     escolha = _escolha(
-        "fds", [_item("fds", fds_livres=1.0, pico_min_dia=-0.5), _item("base")]
+        perfil, "fds", [_item("fds", fds_livres=1.0, pico_min_dia=-0.5), _item("base")]
     )
     novos = adaptacao.atualizar_pesos(escolha)
     # Escolhido é melhor em fds_livres (+1 vs 0) e pior em pico (−0.5 vs 0).
@@ -254,11 +261,11 @@ def test_atualizar_pesos_move_na_direcao_da_escolha():
 
 
 @pytest.mark.django_db
-def test_atualizar_pesos_respeita_clamp():
-    PesoPreferencia.objects.create(metrica="fds_livres", valor=2.95)
-    PesoPreferencia.objects.create(metrica="pico_min_dia", valor=0.22)
+def test_atualizar_pesos_respeita_clamp(perfil):
+    PesoPreferencia.objects.create(dono=perfil, metrica="fds_livres", valor=2.95)
+    PesoPreferencia.objects.create(dono=perfil, metrica="pico_min_dia", valor=0.22)
     escolha = _escolha(
-        "x", [_item("x", fds_livres=2.0, pico_min_dia=-2.0), _item("base")]
+        perfil, "x", [_item("x", fds_livres=2.0, pico_min_dia=-2.0), _item("base")]
     )
     novos = adaptacao.atualizar_pesos(escolha)
     assert novos["fds_livres"] == adaptacao.PESO_MAX
@@ -266,10 +273,10 @@ def test_atualizar_pesos_respeita_clamp():
 
 
 @pytest.mark.django_db
-def test_atualizar_pesos_lote_sem_rejeitados_nao_ensina():
-    escolha = _escolha("unico", [_item("unico", fds_livres=1.0)])
-    assert adaptacao.atualizar_pesos(escolha) == adaptacao.pesos_atuais()
-    assert PesoPreferencia.objects.count() == 0
+def test_atualizar_pesos_lote_sem_rejeitados_nao_ensina(perfil):
+    escolha = _escolha(perfil, "unico", [_item("unico", fds_livres=1.0)])
+    assert adaptacao.atualizar_pesos(escolha) == adaptacao.pesos_atuais(perfil)
+    assert PesoPreferencia.objects.do_dono(perfil).count() == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -403,7 +410,7 @@ def test_tarefa_invalida_422(api):
 
 
 @pytest.mark.django_db
-def test_escolher_grava_escolha_e_atualiza_pesos(api, eager, settings):
+def test_escolher_grava_escolha_e_atualiza_pesos(api, eager, settings, perfil):
     settings.IA_PLANEJAMENTO_ENABLED = False
     tarefas = _tarefas_validas()
     resp = _post_cenarios(api, tarefas)
@@ -418,12 +425,12 @@ def test_escolher_grava_escolha_e_atualiza_pesos(api, eager, settings):
     )
     assert resp.status_code == 200
     assert resp.data["aplicado"] is False
-    escolha = EscolhaCenario.objects.get()
+    escolha = EscolhaCenario.objects.do_dono(perfil).get()
     assert escolha.escolhido == alvo["id"]
     assert escolha.era_sugerido == alvo["sugerido"]
     assert {c["id"] for c in escolha.lote} == {c["id"] for c in resultado["cenarios"]}
     assert escolha.pesos_no_momento == resultado["pesos_usados"]
-    assert PesoPreferencia.objects.count() == len(C.METRICAS)
+    assert PesoPreferencia.objects.do_dono(perfil).count() == len(C.METRICAS)
 
 
 @pytest.mark.django_db
@@ -449,7 +456,9 @@ def test_escolher_com_aplicar_persiste_o_plano(api, eager, settings):
 
 
 @pytest.mark.django_db
-def test_escolher_job_desconhecido_404_e_cenario_errado_400(api, eager, settings):
+def test_escolher_job_desconhecido_404_e_cenario_errado_400(
+    api, eager, settings, perfil
+):
     resp = api.post(
         "/api/v1/planejamento/cenarios/escolher",
         {"job_id": "nao-existe", "cenario_id": "base"},
@@ -467,4 +476,4 @@ def test_escolher_job_desconhecido_404_e_cenario_errado_400(api, eager, settings
         format="json",
     )
     assert resp.status_code == 400
-    assert EscolhaCenario.objects.count() == 0
+    assert EscolhaCenario.objects.do_dono(perfil).count() == 0

@@ -34,8 +34,14 @@ TTL_FRESCO = 60 * 60 * 24 * 30  # 30 dias
 TTL_STALE = 60 * 60 * 24 * 365  # 1 ano (fallback)
 
 
-def feriados_do_ano(ano: int) -> set[date]:
-    return _nacionais(ano) | _estaduais(ano) | _municipais(ano)
+def feriados_do_ano(ano: int, dono) -> set[date]:
+    """As três camadas mescladas, na ótica de um perfil.
+
+    Só a municipal é por-dono: nacional e estadual são **fatos globais**, então
+    o cache por ano continua compartilhado entre todos os perfis — a chamada
+    externa cara segue amortizada, sem vazar nada de ninguém.
+    """
+    return _nacionais(ano) | _estaduais(ano) | _municipais(ano, dono)
 
 
 def _nacionais(ano: int) -> set[date]:
@@ -78,12 +84,17 @@ def _estaduais(ano: int) -> set[date]:
         return set()
 
 
-def _municipais(ano: int) -> set[date]:
-    """Feriados locais do DB: recorrentes (ano nulo) + pontuais do ano."""
+def _municipais(ano: int, dono) -> set[date]:
+    """Feriados locais do DB: recorrentes (ano nulo) + pontuais do ano.
+
+    Por-dono (decisão Q5 do plano): cada perfil mantém a própria lista.
+    """
     from planner.models import FeriadoLocal  # import local: evita ciclo no boot
 
     datas = set()
-    for f in FeriadoLocal.objects.filter(Q(ano__isnull=True) | Q(ano=ano)):
+    for f in FeriadoLocal.objects.do_dono(dono).filter(
+        Q(ano__isnull=True) | Q(ano=ano)
+    ):
         try:
             datas.add(date(ano, f.mes, f.dia))
         except ValueError:  # ex.: 29/02 em ano não bissexto — pula neste ano

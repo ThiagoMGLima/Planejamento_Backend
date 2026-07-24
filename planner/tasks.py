@@ -18,6 +18,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.utils.dateparse import parse_datetime
 
+from .models import Perfil
 from .services import (
     adaptacao,
     agente,
@@ -28,15 +29,29 @@ from .services import (
 )
 
 
-def _chave_cache(tarefa_ids, prefs_usadas, sessoes_base, prefixo="planejar_ia"):
-    """Chave determinística do resultado: ids + prefs efetivas + plano base.
+def _dono(dono_id):
+    """O perfil dono do job. As tasks recebem o **id** e não o objeto porque o
+    payload vai serializado para a fila; recarregar aqui é o preço de o worker
+    saber de quem é o trabalho (Fase 0B, PR1)."""
+    return Perfil.objects.get(id=dono_id)
+
+
+def _chave_cache(
+    dono_id, tarefa_ids, prefs_usadas, sessoes_base, prefixo="planejar_ia"
+):
+    """Chave determinística do resultado: dono + ids + prefs efetivas + plano base.
 
     O plano base já é função determinística das entradas; usá-lo na chave garante
     que mudanças relevantes invalidem o cache. `prefixo` separa as famílias de
     chave (planejar-ia vs cenários).
+
+    O `dono` entra na chave mesmo os `tarefa_ids` sendo UUIDs: sem ele, a
+    separação entre perfis dependeria de os ids serem imprevisíveis — o que é
+    obscuridade, não fronteira.
     """
     base = json.dumps(
         {
+            "dono": str(dono_id),
             "ids": sorted(map(str, tarefa_ids)),
             "prefs": prefs_usadas,
             "plano": [(s["tarefa_id"], s["inicio"], s["fim"]) for s in sessoes_base],
@@ -48,18 +63,21 @@ def _chave_cache(tarefa_ids, prefs_usadas, sessoes_base, prefixo="planejar_ia"):
 
 
 @shared_task
-def planejar_ia_task(tarefa_ids, a_partir_de_iso, preferencias, horizonte_dias=None):
+def planejar_ia_task(
+    dono_id, tarefa_ids, a_partir_de_iso, preferencias, horizonte_dias=None
+):
     """Pipeline assíncrono. Retorna o dict do contrato (ver docs/tasks)."""
     inicio = time.monotonic()
+    dono = _dono(dono_id)
     agora = parse_datetime(a_partir_de_iso)
-    validas, _ = planejamento.validar_tarefas(tarefa_ids)
+    validas, _ = planejamento.validar_tarefas(dono, tarefa_ids)
     base = planejamento.montar_plano(
-        validas, agora, preferencias, horizonte_dias=horizonte_dias
+        dono, validas, agora, preferencias, horizonte_dias=horizonte_dias
     )
     plano_base = planejamento.serializar_plano(base)
 
     chave = _chave_cache(
-        tarefa_ids, plano_base["preferencias_usadas"], plano_base["sessoes"]
+        dono_id, tarefa_ids, plano_base["preferencias_usadas"], plano_base["sessoes"]
     )
     hit = cache.get(chave)
     if hit is not None:
@@ -74,7 +92,12 @@ def planejar_ia_task(tarefa_ids, a_partir_de_iso, preferencias, horizonte_dias=N
             bruto.get("diretrizes", {}), base.tarefas, base.agora, base.horizonte_fim
         )
         melhor = planejamento.montar_plano(
-            validas, agora, preferencias, diretrizes, horizonte_dias=horizonte_dias
+            dono,
+            validas,
+            agora,
+            preferencias,
+            diretrizes,
+            horizonte_dias=horizonte_dias,
         )
         resultado = {
             "plano": planejamento.serializar_plano(melhor),
@@ -107,7 +130,7 @@ def planejar_ia_task(tarefa_ids, a_partir_de_iso, preferencias, horizonte_dias=N
 
 @shared_task(bind=True)
 def gerar_cenarios_task(
-    self, tarefa_ids, a_partir_de_iso, preferencias, horizonte_dias=None
+    self, dono_id, tarefa_ids, a_partir_de_iso, preferencias, horizonte_dias=None
 ):
     """Pipeline de cenários (Marco C1b, §2.2 da visão).
 
@@ -116,15 +139,20 @@ def gerar_cenarios_task(
     narrativa. Ollama fora ⇒ só os arquétipos + `ia_indisponivel: true`.
     """
     inicio = time.monotonic()
+    dono = _dono(dono_id)
     agora = parse_datetime(a_partir_de_iso)
-    validas, _ = planejamento.validar_tarefas(tarefa_ids)
+    validas, _ = planejamento.validar_tarefas(dono, tarefa_ids)
     base = planejamento.montar_plano(
-        validas, agora, preferencias, horizonte_dias=horizonte_dias
+        dono, validas, agora, preferencias, horizonte_dias=horizonte_dias
     )
     plano_base = planejamento.serializar_plano(base)
 
     chave = _chave_cache(
-        tarefa_ids, plano_base["preferencias_usadas"], plano_base["sessoes"], "cenarios"
+        dono_id,
+        tarefa_ids,
+        plano_base["preferencias_usadas"],
+        plano_base["sessoes"],
+        "cenarios",
     )
     job_id = self.request.id or "eager"
     hit = cache.get(chave)
@@ -167,7 +195,12 @@ def gerar_cenarios_task(
             res = base  # diretrizes vazias por construção; não recalcula
         else:
             res = planejamento.montar_plano(
-                validas, agora, preferencias, diretrizes, horizonte_dias=horizonte_dias
+                dono,
+                validas,
+                agora,
+                preferencias,
+                diretrizes,
+                horizonte_dias=horizonte_dias,
             )
         metricas = cenarios.metricas_do_plano(res)
         lote.append(
@@ -184,7 +217,7 @@ def gerar_cenarios_task(
 
     # Decaimento "ao ler" (C3): pesos antigos escorregam 2% rumo ao neutro a
     # cada lote gerado — gostos mudam com o semestre.
-    pesos = adaptacao.decair_pesos()
+    pesos = adaptacao.decair_pesos(dono)
     finalistas = cenarios.pontuar(cenarios.filtrar_dominados(lote), pesos)
 
     if not ia_indisponivel:
@@ -237,7 +270,7 @@ MAX_MENSAGENS_CONVERSA = 12
 
 
 @shared_task(bind=True)
-def refinar_cenario_task(self, job_id, cenario_id, mensagem):
+def refinar_cenario_task(self, dono_id, job_id, cenario_id, mensagem):
     """Refino conversacional de um lote de cenários (Marco C5).
 
     lote (cache) → reconstrói o plano base da `entrada` → IA traduz o pedido
@@ -248,6 +281,7 @@ def refinar_cenario_task(self, job_id, cenario_id, mensagem):
     (`cenarios_conversa:{job_id}`) e é reenviada nas chamadas seguintes.
     """
     inicio = time.monotonic()
+    dono = _dono(dono_id)
     resultado = cache.get(f"cenarios_job:{job_id}")
     if resultado is None:
         job = AsyncResult(str(job_id))
@@ -259,8 +293,9 @@ def refinar_cenario_task(self, job_id, cenario_id, mensagem):
         raise ValueError("lote sem dados de entrada; gere os cenários novamente")
 
     agora = parse_datetime(entrada["a_partir_de"])
-    validas, _ = planejamento.validar_tarefas(entrada["tarefa_ids"])
+    validas, _ = planejamento.validar_tarefas(dono, entrada["tarefa_ids"])
     base = planejamento.montar_plano(
+        dono,
         validas,
         agora,
         entrada["preferencias"],
@@ -311,6 +346,7 @@ def refinar_cenario_task(self, job_id, cenario_id, mensagem):
         bruto.get("diretrizes"), base.tarefas, agora, base.horizonte_fim
     )
     res = planejamento.montar_plano(
+        dono,
         validas,
         agora,
         entrada["preferencias"],
@@ -393,18 +429,21 @@ MAX_MENSAGENS_AGENTE = 12
 
 
 @shared_task(bind=True)
-def agente_chat_task(self, conversa_id, mensagem, contexto):
+def agente_chat_task(self, dono_id, conversa_id, mensagem, contexto):
     """Um turno do assistente de rotina (C4). Roda o loop de tool-use de
     `agente.conversar` e guarda o resultado no cache (chave por job, como os
     irmãos). Ollama/API fora ⇒ `ia_indisponivel: true`, conversa intocada.
     A memória da conversa fica em `agente_conversa:{conversa_id}`.
     """
     job_id = self.request.id or "eager"
-    chave_conversa = f"agente_conversa:{conversa_id}"
+    # A memória da conversa é por dono: `conversa_id` vem do front e dois
+    # perfis poderiam gerar o mesmo — sem o dono na chave, um leria o histórico
+    # do outro.
+    chave_conversa = f"agente_conversa:{dono_id}:{conversa_id}"
     historico = cache.get(chave_conversa) or []
 
     try:
-        resultado = agente.conversar(mensagem, contexto, historico)
+        resultado = agente.conversar(_dono(dono_id), mensagem, contexto, historico)
     except agente.AgenteIndisponivel:
         saida = {
             "resposta": "",

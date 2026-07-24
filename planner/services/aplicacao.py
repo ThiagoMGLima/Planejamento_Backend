@@ -29,16 +29,20 @@ def _normalizar_sessao(s):
     }
 
 
-def aplicar_sessoes(sessoes):
+def aplicar_sessoes(dono, sessoes):
     """Cria um Evento por sessão (atômico) e marca as tarefas como PROMOVIDA.
 
     Retorna a lista de Eventos criados. Tarefa inexistente ou sem classe ⇒
-    AplicacaoInvalida (nada é gravado).
+    AplicacaoInvalida (nada é gravado). Tarefa de OUTRO perfil cai no mesmo
+    "inexistente": o escopo entra na busca, então ela nunca é encontrada.
     """
     sessoes = [_normalizar_sessao(s) for s in sessoes]
     ids = {s["tarefa_id"] for s in sessoes}
     por_id = {
-        str(t.id): t for t in Tarefa.objects.select_related("classe").filter(id__in=ids)
+        str(t.id): t
+        for t in Tarefa.objects.do_dono(dono)
+        .select_related("classe")
+        .filter(id__in=ids)
     }
 
     faltando = sorted(tid for tid in ids if tid not in por_id)
@@ -56,6 +60,7 @@ def aplicar_sessoes(sessoes):
     with transaction.atomic():
         criados = [
             Evento.objects.create(
+                dono=dono,
                 titulo=por_id[s["tarefa_id"]].titulo,
                 descricao=por_id[s["tarefa_id"]].descricao,
                 inicio=s["inicio"],

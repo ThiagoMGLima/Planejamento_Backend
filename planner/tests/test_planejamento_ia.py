@@ -13,7 +13,7 @@ import pytest
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from planner import tasks
+from planner import tasks, views
 from planner.services import planejamento as P
 from planner.services import planejamento_ia as IA
 
@@ -56,7 +56,9 @@ def eager():
     app.conf.task_store_eager_result = False
 
 
-def _resultado_base(tarefas_entrada, agora=SEG, prefs_entrada=None, horizonte=None):
+def _resultado_base(
+    tarefas_entrada, agora=SEG, prefs_entrada=None, horizonte=None, dono=None
+):
     """ResultadoPlano puro (sem DB) a partir de TarefaEntrada já montadas."""
     prefs, prefs_usadas = P.montar_preferencias(prefs_entrada or {})
     if horizonte is None:
@@ -74,6 +76,7 @@ def _resultado_base(tarefas_entrada, agora=SEG, prefs_entrada=None, horizonte=No
         ocupado=[],
         agora=agora,
         horizonte_fim=horizonte,
+        dono=dono,
     )
 
 
@@ -87,9 +90,9 @@ def _tarefa_valida(**kw):
 # construir_contexto                                                           #
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db  # o contexto lê pesos/fatores adaptativos (C3)
-def test_construir_contexto_fatos_corretos():
+def test_construir_contexto_fatos_corretos(perfil):
     t = P.TarefaEntrada("A", "Prova", "c1", 300, SEG + timedelta(days=10))
-    ctx = IA.construir_contexto(_resultado_base([t]))
+    ctx = IA.construir_contexto(_resultado_base([t], dono=perfil))
     info = ctx["tarefas"][0]
     assert info["id"] == "A"
     assert info["esforco_min"] == 300
@@ -101,11 +104,11 @@ def test_construir_contexto_fatos_corretos():
 
 
 @pytest.mark.django_db
-def test_construir_contexto_restante_vem_do_nao_alocado():
+def test_construir_contexto_restante_vem_do_nao_alocado(perfil):
     # Esforço gigante p/ horizonte curtíssimo → sobra restante.
     t = P.TarefaEntrada("A", "Big", "c1", 5000, SEG + timedelta(hours=10))
     ctx = IA.construir_contexto(
-        _resultado_base([t], horizonte=SEG + timedelta(hours=10))
+        _resultado_base([t], horizonte=SEG + timedelta(hours=10), dono=perfil)
     )
     info = ctx["tarefas"][0]
     assert info["restante_min"] == 5000 - info["alocado_min"]
@@ -114,9 +117,9 @@ def test_construir_contexto_restante_vem_do_nao_alocado():
 
 
 @pytest.mark.django_db
-def test_construir_contexto_inclui_carga_resumo():
+def test_construir_contexto_inclui_carga_resumo(perfil):
     t = P.TarefaEntrada("A", "Prova", "c1", 300, SEG + timedelta(days=10))
-    resumo = IA.construir_contexto(_resultado_base([t]))["carga_resumo"]
+    resumo = IA.construir_contexto(_resultado_base([t], dono=perfil))["carga_resumo"]
     assert resumo["dias_com_carga"] >= 1
     assert resumo["carga_maxima_dia_min"] >= resumo["carga_media_dia_min"] >= 1
 
@@ -282,7 +285,10 @@ def test_alertas_do_plano_medio_quando_dia_bloqueado_e_usado():
     prefs = replace(prefs, dias_bloqueados=frozenset({date(2026, 6, 1)}))
     t = P.TarefaEntrada("A", "A", "c1", 60, aware(2026, 6, 1, 22))
     sessoes, nao = P.calcular_plano([t], [], prefs, SEG, t.deadline)
-    res = P.ResultadoPlano(sessoes, nao, prefs, prefs_usadas, [t], [], SEG, t.deadline)
+    # dono=None: `alertas_do_plano` é função pura sobre o plano (ver test_cenarios).
+    res = P.ResultadoPlano(
+        sessoes, nao, prefs, prefs_usadas, [t], [], SEG, t.deadline, dono=None
+    )
     alertas = IA.alertas_do_plano(res)
     assert any(
         a["severidade"] == "medio" and "bloqueado" in a["mensagem"] for a in alertas
@@ -293,7 +299,7 @@ def test_alertas_do_plano_medio_quando_dia_bloqueado_e_usado():
 # Pipeline (task chamada direto; gerar_melhoria mockado)                       #
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db
-def test_pipeline_feliz():
+def test_pipeline_feliz(perfil):
     t = _tarefa_valida(esforco_estimado=300)
     bruto = {
         "diretrizes": {"prioridades": {str(t.id): 5}},
@@ -302,7 +308,7 @@ def test_pipeline_feliz():
         "sugestoes": [{"tipo": "ajustar_pref", "descricao": "d", "acao": {}}],
     }
     with mock.patch("planner.tasks.planejamento_ia.gerar_melhoria", return_value=bruto):
-        out = tasks.planejar_ia_task([str(t.id)], SEG.isoformat(), {})
+        out = tasks.planejar_ia_task(str(perfil.id), [str(t.id)], SEG.isoformat(), {})
 
     assert out["ia_indisponivel"] is False
     assert set(out) >= {
@@ -321,27 +327,27 @@ def test_pipeline_feliz():
 
 
 @pytest.mark.django_db
-def test_fallback_quando_ia_indisponivel():
+def test_fallback_quando_ia_indisponivel(perfil):
     t = _tarefa_valida(esforco_estimado=120)
     with mock.patch(
         "planner.tasks.planejamento_ia.gerar_melhoria",
         side_effect=IA.OllamaIndisponivel("down"),
     ):
-        out = tasks.planejar_ia_task([str(t.id)], SEG.isoformat(), {})
+        out = tasks.planejar_ia_task(str(perfil.id), [str(t.id)], SEG.isoformat(), {})
     assert out["ia_indisponivel"] is True
     assert out["resumo"] == ""
     assert sum(s["dur_min"] for s in out["plano"]["sessoes"]) == 120
 
 
 @pytest.mark.django_db
-def test_cache_evita_segunda_chamada_de_ia():
+def test_cache_evita_segunda_chamada_de_ia(perfil):
     t = _tarefa_valida(esforco_estimado=120)
     bruto = {"diretrizes": {}, "resumo": "r", "trade_offs": [], "sugestoes": []}
     with mock.patch(
         "planner.tasks.planejamento_ia.gerar_melhoria", return_value=bruto
     ) as m:
-        tasks.planejar_ia_task([str(t.id)], SEG.isoformat(), {})
-        tasks.planejar_ia_task([str(t.id)], SEG.isoformat(), {})
+        tasks.planejar_ia_task(str(perfil.id), [str(t.id)], SEG.isoformat(), {})
+        tasks.planejar_ia_task(str(perfil.id), [str(t.id)], SEG.isoformat(), {})
     assert m.call_count == 1
 
 
@@ -359,8 +365,11 @@ def test_endpoint_enfileira_retorna_202(api, eager, settings):
     assert resp.data["job_id"]
 
 
-def test_endpoint_status_branches(api):
+def test_endpoint_status_branches(api, perfil):
     """O endpoint de status reflete os 3 estados do AsyncResult."""
+    # Job registrado como do perfil: sem isso o status responde 404 sem sequer
+    # olhar o AsyncResult (verificação de posse do PR1).
+    views._registrar_dono_job("abc", perfil)
 
     def _fake(successful, failed, result=None):
         m = mock.Mock()
@@ -420,12 +429,12 @@ def test_endpoint_sem_tarefa_ids_400(api):
 # horizonte (escopo do plano) + estimativa                                    #
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db
-def test_montar_plano_horizonte_limita_escopo():
+def test_montar_plano_horizonte_limita_escopo(perfil):
     # Esforço que estoura a capacidade física de 1 semana (mesmo relaxada: 24h×7 =
     # 10080 min) mas cabe em ~2 meses. Horizonte menor aloca menos e sobra trabalho.
     t = _tarefa_valida(esforco_estimado=20000, deadline=aware(2026, 8, 1, 18))
-    auto = P.montar_plano([t], SEG, {})
-    semana = P.montar_plano([t], SEG, {}, horizonte_dias=7)
+    auto = P.montar_plano(perfil, [t], SEG, {})
+    semana = P.montar_plano(perfil, [t], SEG, {}, horizonte_dias=7)
     aloc = lambda r: sum(s.dur_min for s in r.sessoes)  # noqa: E731
     assert semana.horizonte_fim < auto.horizonte_fim
     assert aloc(semana) < aloc(auto)  # janela menor aloca menos
@@ -442,19 +451,22 @@ def _pico_diario(res):
 
 
 @pytest.mark.django_db
-def test_teto_total_ia_suaviza_pico_diario():
+def test_teto_total_ia_suaviza_pico_diario(perfil):
     # Duas tarefas cabem juntas no 1º dia (240 min); o teto total da IA espalha.
     tA = _tarefa_valida(esforco_estimado=120, deadline=aware(2026, 6, 10, 18))
     tB = _tarefa_valida(esforco_estimado=120, deadline=aware(2026, 6, 10, 18))
-    base = P.montar_plano([tA, tB], SEG, {})
-    suave = P.montar_plano([tA, tB], SEG, {}, diretrizes={"max_min_por_dia_total": 120})
+    base = P.montar_plano(perfil, [tA, tB], SEG, {})
+    suave = P.montar_plano(
+        perfil, [tA, tB], SEG, {}, diretrizes={"max_min_por_dia_total": 120}
+    )
     assert _pico_diario(suave) <= 120 < _pico_diario(base)
 
 
 @pytest.mark.django_db
-def test_teto_total_ia_nunca_afrouxa_o_do_usuario():
+def test_teto_total_ia_nunca_afrouxa_o_do_usuario(perfil):
     t = _tarefa_valida(esforco_estimado=300, deadline=aware(2026, 6, 20, 18))
     res = P.montar_plano(
+        perfil,
         [t],
         SEG,
         {"max_min_por_dia_total": 60},

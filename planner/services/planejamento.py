@@ -195,19 +195,25 @@ def _prefs_do_nivel(prefs, nivel):
 # --------------------------------------------------------------------------- #
 # Eventos ocupados                                                             #
 # --------------------------------------------------------------------------- #
-def intervalos_ocupados(agora, horizonte_fim, excluir_evento_ids=None):
+def intervalos_ocupados(dono, agora, horizonte_fim, excluir_evento_ids=None):
     """Intervalos [inicio, fim] bloqueados no horizonte, já mesclados.
 
     Cobre eventos simples (query direta) e recorrentes (expandidos sob demanda,
     igual EventoViewSet.list). Ocorrências PULADAS são omitidas por `expandir`.
     `excluir_evento_ids` tira eventos simples do bloqueio — o replanejar (C2)
     exclui as sessões que serão substituídas, senão elas se auto-bloqueiam.
+
+    O `dono` é obrigatório e não tem default: sem escopo, o solver trataria a
+    agenda de TODOS os perfis como "ocupado" — plano errado, dados de terceiros
+    inferidos, e nada disso levantaria exceção.
     """
     intervalos = []
 
-    simples = Evento.objects.filter(
-        regra_recorrencia__isnull=True, inicio__lt=horizonte_fim, fim__gt=agora
-    ).only("inicio", "fim")
+    simples = (
+        Evento.objects.do_dono(dono)
+        .filter(regra_recorrencia__isnull=True, inicio__lt=horizonte_fim, fim__gt=agora)
+        .only("inicio", "fim")
+    )
     if excluir_evento_ids:
         simples = simples.exclude(id__in=excluir_evento_ids)
     for ev in simples:
@@ -215,10 +221,11 @@ def intervalos_ocupados(agora, horizonte_fim, excluir_evento_ids=None):
 
     feriados = set()
     for ano in range(agora.year, horizonte_fim.year + 1):
-        feriados |= holidays.feriados_do_ano(ano)
+        feriados |= holidays.feriados_do_ano(ano, dono)
 
     recorrentes = (
-        Evento.objects.filter(regra_recorrencia__isnull=False)
+        Evento.objects.do_dono(dono)
+        .filter(regra_recorrencia__isnull=False)
         .select_related("regra_recorrencia")
         .prefetch_related("ocorrencias")
     )
@@ -478,18 +485,34 @@ class ResultadoPlano:
     ocupado: list
     agora: datetime
     horizonte_fim: datetime
+    # De quem é este plano. Carregar o dono aqui evita que cada consumidor a
+    # jusante (contexto da IA, cenários, refino) tenha de recebê-lo por fora e
+    # arrisque passar o de outro perfil.
+    #
+    # **Sem default, de propósito.** Com `= None` o plano nasceria sem dono sem
+    # ninguém reclamar, e o erro só apareceria lá adiante, em
+    # `adaptacao.fator_classe(None, ...)`, como um `AttributeError` sem relação
+    # aparente com a causa. É a mesma armadilha do `contextvar` que o desenho
+    # deste PR recusou: identidade opcional falha em silêncio.
+    dono: object
 
 
-def validar_tarefas(tarefa_ids):
+def validar_tarefas(dono, tarefa_ids):
     """Separa elegíveis de inválidas (mesma regra do /calcular de hoje).
 
     Inválida = inexistente / já PROMOVIDA / sem deadline|esforço|classe. Aceita
     ids como UUID ou str (a task recebe strings). Retorna
     `(validas: list[Tarefa], invalidas: list[{tarefa_id, motivo}])`.
+
+    Tarefa de outro perfil é "inexistente" — e é assim que deve ser: a resposta
+    não deve deixar distinguir "não existe" de "existe e não é sua".
     """
     ids = list(dict.fromkeys(str(t) for t in tarefa_ids))  # dedup preservando ordem
     por_id = {
-        str(t.id): t for t in Tarefa.objects.select_related("classe").filter(id__in=ids)
+        str(t.id): t
+        for t in Tarefa.objects.do_dono(dono)
+        .select_related("classe")
+        .filter(id__in=ids)
     }
     validas = []
     invalidas = []
@@ -518,6 +541,7 @@ def validar_tarefas(tarefa_ids):
 
 
 def montar_plano(
+    dono,
     tarefas_validas,
     agora,
     preferencias_entrada,
@@ -583,7 +607,7 @@ def montar_plano(
         for t in tarefas_validas:
             cid = str(t.classe_id)
             if cid not in fatores:
-                fatores[cid] = adaptacao.fator_classe(cid)
+                fatores[cid] = adaptacao.fator_classe(dono, cid)
 
     tarefas = []
     for t in tarefas_validas:
@@ -622,7 +646,7 @@ def montar_plano(
             tarefas = restantes
             prefs_usadas = {**prefs_usadas, "excluir_tarefas": sorted(excluir)}
 
-    ocupado = intervalos_ocupados(agora, horizonte_fim, excluir_evento_ids)
+    ocupado = intervalos_ocupados(dono, agora, horizonte_fim, excluir_evento_ids)
     sessoes, nao_alocado = calcular_plano(tarefas, ocupado, prefs, agora, horizonte_fim)
     return ResultadoPlano(
         sessoes=sessoes,
@@ -633,6 +657,7 @@ def montar_plano(
         ocupado=ocupado,
         agora=agora,
         horizonte_fim=horizonte_fim,
+        dono=dono,
     )
 
 
