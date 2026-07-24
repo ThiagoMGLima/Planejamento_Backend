@@ -61,12 +61,19 @@ convenção "1 marco = 1 PR" do `CLAUDE.md`):
    **juntos, antes de escrever código**. Nada de implementar sobre premissa não
    confirmada.
 5. **Implementação.**
-6. **Testes** — suíte + lint + checagem de migrations verdes (ver `CLAUDE.md`).
+6. **Testes do backend** — suíte + lint + checagem de migrations verdes (ver `CLAUDE.md`).
 7. **Documento de contexto** em `docs/tasks/contexto-<task>.md` — o que era para
    fazer, o que foi feito, decisões, bugs encontrados e como corrigidos, e o estado
    em que a próxima task começa. **O contexto do agente é zerado entre tasks**, então
    este documento é o único fio. Índice em `docs/tasks/README.md`.
-8. Se tudo ok → **próxima task**.
+8. **Prompt de sincronia com o frontend** — o frontend é um repo **vizinho**
+   (`../../Frontend/Planejamento_Frontend/`) que consome esta API. Produza um prompt,
+   para o usuário repassar ao agente do frontend, com as mudanças de contrato de forma
+   acionável (ou a confirmação de que não há nenhuma, com o porquê). Detalhe em
+   `CLAUDE.md`, "Passos 8–9".
+9. **PR — gated no frontend.** Só depois que o usuário aplicar as mudanças no
+   frontend, rodar os **testes end-to-end** lá e confirmar que está tudo verde.
+10. Se tudo ok → **próxima task**.
 
 ---
 

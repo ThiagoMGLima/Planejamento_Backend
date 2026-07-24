@@ -28,8 +28,9 @@ seção "Método de trabalho"):
 
 1. Task (próximo item do ROADMAP) → 2. **Análise do código atual** → 3. **Plano de
 implementação** em `docs/tasks/`, com as dúvidas explícitas → 4. **Revisão do usuário
-+ sanar dúvidas** → 5. Implementação → 6. Testes → 7. **Documento de contexto** da
-task → 8. Próxima task.
++ sanar dúvidas** → 5. Implementação → 6. Testes do backend → 7. **Documento de
+contexto** da task → 8. **Prompt de sincronia com o frontend** → 9. **PR** (só depois
+do frontend + E2E verdes) → 10. Próxima task.
 
 O passo 4 é um **gate**: não escreva código de implementação antes de o plano ser
 revisado e as dúvidas resolvidas. Levante as dúvidas de uma vez, no plano, em vez de
@@ -44,6 +45,34 @@ Ainda no passo 7, atualize **"Estado atual"** logo abaixo e o status no
 `ROADMAP.md`. São 3 linhas e evitam o pior modo de falha deste projeto: um agente
 sem contexto reimplementando o que já existe, ou supondo que existe o que não
 existe.
+
+#### Passos 8–9: o frontend é o segundo gate do PR
+
+**O backend não vive sozinho.** O frontend é um repo **vizinho**
+(`../../Frontend/Planejamento_Frontend/`, SPA React+Vite) que consome esta API por
+`VITE_API_URL`. Um PR de backend só fecha quando os dois lados estão verdes juntos —
+senão o `main` do backend passa a servir um contrato que o frontend ainda não fala.
+
+**Passo 8 — prompt de sincronia (depois dos testes do backend, nunca antes).**
+Assim que a suíte do backend passar, produza um **prompt para o usuário mandar ao
+agente do frontend**. O prompt deve:
+
+- dizer que o frontend está no **repositório vizinho**
+  (`../../Frontend/Planejamento_Frontend/` a partir daqui);
+- descrever as mudanças de contrato de forma **concreta e acionável**: endpoints
+  novos/alterados, formas de request/response, parâmetros, códigos de status;
+- **ou**, quando o PR não muda o contrato externo (foi o caso do PR1), dizer isso
+  **explicitamente e com o porquê** — o prompt de "nada a fazer, eis a razão" é um
+  artefato válido: dá ao agente do frontend como confirmar que nada quebrou.
+
+O prompt é para o **usuário repassar**, não para o agente do backend executar: o
+agente do backend não toca no repo do frontend.
+
+**Passo 9 — o PR é gated.** **Não abra o PR** logo após os testes do backend. O PR
+só pode ser aberto **depois** que o usuário aplicar as mudanças no frontend, rodar os
+**testes end-to-end** lá e confirmar que está tudo verde. Até essa confirmação chegar,
+o trabalho fica em espera — mesma disciplina do gate do passo 4: não avance sobre uma
+premissa (aqui, "o frontend acompanhou") que ainda não foi confirmada.
 
 ### Onde olhar primeiro (agente sem contexto)
 
