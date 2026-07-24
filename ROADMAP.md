@@ -6,18 +6,23 @@
 
 ## Princípios que guiam tudo
 
-1. **Beta técnico primeiro, não-hospedado, JÁ com contas.** Distribui pros **amigos
-   técnicos** via Docker (cada um roda a própria cópia); eles testam também o
-   **sistema de contas e a segurança do Supabase Auth**. Leigos e hospedagem ficam
-   pra depois.
+1. **Beta técnico primeiro, hospedado, JÁ com contas.** Distribui pros **amigos
+   técnicos** por **link**; eles testam também o **sistema de contas e o isolamento**.
+   Leigos ficam pra depois — o que muda é o público, não mais a arquitetura.
+
+   > **Revisado em 24/07/2026** (era "não-hospedado, cada um roda a própria cópia").
+   > Ver "Arquitetura do beta" — a mudança veio de querer **tudo no Supabase**, e
+   > banco central com app local poria a credencial do banco na máquina de cada
+   > testador.
 2. **Fundação de contas entra no beta; regras de negócio sobem por cima.** Como os
    testadores vão exercitar auth/isolamento, o `dono` vem **agora** — antes de as regras
    assentarem. Aceita-se o **retrabalho leve** de re-tocar os models quando as regras
    mudarem (Fase 1).
-3. **Não-hospedado + Supabase Auth convivem.** O app roda local; o Auth é um serviço na
-   nuvem usado mesmo assim. A IA segue local (Ollama) no beta.
-4. **Web primeiro, quando for hospedar.** Ao hospedar, valida com web (link + PWA +
-   login Google — trivial pra leigo). Mobile (RN/Expo) e desktop nativo vêm depois.
+3. **Uma arquitetura só, do beta ao produto.** Supabase (Auth + Postgres) + backend
+   hospedado desde o beta. Não se mantém uma montagem para testar e outra para vender:
+   o que os testadores exercitam é o que vai para produção.
+4. **Web primeiro.** O beta já é web (link + login). PWA, mobile (RN/Expo) e desktop
+   nativo vêm depois.
 5. **Sem pressa, qualidade acima de prazo.** Refatoração é aceitável.
 6. **A IA nunca é caminho crítico.** O solver (Python puro, ms) entrega plano bom
    sozinho; a IA é tempero e degrada com `ia_indisponivel: true`. Custo da IA é opcional.
@@ -66,19 +71,42 @@ convenção "1 marco = 1 PR" do `CLAUDE.md`):
 
 ---
 
-## Fase 0 — Beta técnico com contas (Docker, não-hospedado + Supabase Auth)  🔜  *(ATIVA)*
+## Fase 0 — Beta técnico com contas (hospedado + Supabase)  🔜  *(ATIVA)*
 
-Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de produto/UX,
-(b) decidir **IA local vs API** com dado real, e (c) **testar contas + segurança do Auth**.
+Objetivo: amigos técnicos usando **por link** pra (a) feedback de produto/UX e
+(b) **testar contas e isolamento** numa instalação central de verdade.
 
-> **Ordem decidida (24/07/2026): a 0B é a espinha, a 0A é encaixe.** A 0B tem **custo
-> de atraso** — o `dono` atravessa 8 models, ~340 linhas de serializers, ~820 de views,
-> ~3.800 de testes, 2 seeds e o servidor MCP; toda feature escrita antes dele vira
-> trabalho a mais dentro da 0B (é o princípio nº 2 aplicado). A 0A não cresce com o
-> tempo: são 3 pontos de chamada, e o padrão já existe pronto. Logo, **começar pelo
-> PR0 da 0B** e encaixar a 0A entre PRs / enquanto a 0B estiver bloqueada por Supabase.
+> ⚠️ **Escopo revisado em 24/07/2026 — "tudo no Supabase".** O beta era não-hospedado,
+> com Postgres local por testador. Agora o Supabase é Auth **e** banco, e o backend
+> roda na nuvem (ver "Arquitetura do beta"). Três consequências que mudam esta fase:
+>
+> - **A decisão IA local vs API sobe para cá** (era Fase 2, "com dado da Fase 0"). Com
+>   o backend hospedado não há GPU do testador para medir: ou se paga GPU na nuvem, ou
+>   a IA do beta vai por **API comercial**. O objetivo (b) original — decidir com dado
+>   de hardware variado — deixou de ser possível nesta fase.
+> - **A 0A encolhe.** 4 dos 5 itens existiam para fazer a distribuição local
+>   funcionar (ver 0A).
+> - **Fases 3.1, 3.2 e parte da 5 são absorvidas aqui.**
 
-### 0A — Provider trocável + empacotamento
+> **Ordem decidida (24/07/2026): a 0B é a espinha.** A 0B tem **custo de atraso** — o
+> `dono` atravessa 8 models, ~340 linhas de serializers, ~820 de views, ~3.800 de
+> testes, 2 seeds e o servidor MCP; toda feature escrita antes dele vira trabalho a
+> mais dentro da 0B (é o princípio nº 2 aplicado). Por isso o PR0 e o PR1 vieram
+> primeiro.
+>
+> **Revisto no mesmo dia, com "tudo no Supabase":** a 0A deixou de ser puro encaixe —
+> a **0A.1 é pré-requisito do 0C.4** (IA hospedada precisa de provider de API). A ordem
+> passa a ser: **0B/PR2 → 0A.1 + 0A.3 → 0C → 0B/PR3**. A 0A.1 continua sendo o que
+> fazer enquanto a 0B estiver bloqueada esperando o projeto Supabase.
+
+### 0A — Provider trocável ~~+ empacotamento~~
+
+> **Revisada em 24/07/2026 pela decisão "tudo no Supabase".** Esta seção existia em
+> boa parte para fazer a **distribuição local** funcionar; com o beta hospedado, 4 dos
+> 5 itens perdem o motivo. Em compensação a **0A.1 deixou de ser encaixe e virou
+> caminho crítico**: hospedado, a IA precisa de um provider de API, e é ela que o
+> torna trocável.
+
 - **0A.1 Abstração `LLMProvider`** em `planejamento_ia.py`: `gerar_diretrizes(contexto)
   -> Diretrizes`, com `OllamaProvider` / `AnthropicProvider` / `OpenAIProvider` /
   `MockProvider`, por env (`LLM_PROVIDER=ollama|api|mock`). `validar_diretrizes`
@@ -90,12 +118,24 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   > com JSON schema forçado*, nos 3 pontos que ainda instanciam `ollama.Client` direto:
   > `planejamento_ia.py:199`, `cenarios.py:199` e `cenarios.py:278`. Considerar
   > unificar `AGENTE_PROVIDER` e `LLM_PROVIDER` em vez de manter dois envs.
-- **0A.2 Empacotamento local:** auto-pull do modelo no boot + **profiles do compose**
-  (`--profile local` sobe Ollama; `--profile api` não sobe).
-- **0A.3 Instrumentação:** logar tempo de parede real + (modo api) tokens.
-- **0A.4 Launcher cross-platform:** `start.*`/`stop.*` (mac/linux/windows) + README de
-  testador. Pré-requisito: Docker (aceitável pra técnico).
-- **0A.5 Teste de tamanho de modelo:** incluir `qwen2.5:3b` na matriz.
+
+  **Default muda para `api` no ambiente hospedado**; `ollama` continua sendo o default
+  de desenvolvimento local (o seu compose não muda).
+- **0A.2 Empacotamento local** — ⏸️ **sai da Fase 0.** Profiles do compose e auto-pull
+  serviam para o testador subir o Ollama na própria máquina. Vira item da Fase 8
+  (desktop nativo), se ela acontecer.
+- **0A.3 Instrumentação:** logar tempo de parede real + **tokens e custo**. **Sobe de
+  prioridade**: com IA por API, isso deixa de ser curiosidade de performance e vira o
+  número que decide o preço (Fase 6) e o corte free/pro.
+- **0A.4 Launcher cross-platform** — ❌ **cancelado.** `start.*`/`stop.*` e o README de
+  testador existiam para quem roda a própria cópia. Hospedado, o testador recebe um
+  link. O que sobra é onboarding, que já está na Fase 5.
+- **0A.5 Teste de tamanho de modelo (3b vs 7b)** — ⏸️ **adiado, sem virar lixo.** Só faz
+  sentido para o fork local/offline (Fase 8) ou se um dia se pagar GPU na nuvem.
+  **Dado já coletado (24/07/2026):** `qwen2.5:3b-instruct` fechou um plano completo em
+  ~50s em CPU pura, com `ia_indisponivel: false`. Foi teste solto — sem a instrumentação
+  da 0A.3 e sem comparação com o 7b — mas é dado real e fica registrado aqui para não
+  se perder.
 
 ### 0B — Contas + autenticação (fundação, puxada pra frente)
 
@@ -180,13 +220,54 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 - **0B.8 Gate de pagamento stub:** `plano` + `pode_usar(feature)` sempre `True` (costura
   pronta, cobrança desligada).
 
-> **Arquitetura do beta.** App roda local por testador; **Supabase provê o Auth**. Os
-> **dados de domínio** ficam no **Postgres local do compose por testador** ✅ (decidido):
-> mantém a IA local, **sem credencial de DB compartilhada** nas máquinas dos testadores —
-> a postura de segurança mais limpa, justo o que eles vão avaliar. Ainda testa auth,
-> criação de conta e isolamento entre contas (via múltiplas contas na mesma máquina).
-> Ponto abdicado: não há visibilidade central da atividade dos testadores. O código de
-> auth/`dono` é **idêntico** ao do produto hospedado — muda só o `DATABASE_URL` (Fase 3.1).
+### 0C — Hospedagem  *(nova, 24/07/2026 — consequência de "tudo no Supabase")*
+
+Absorve a **Fase 3.1**, a **3.2** e a parte de infraestrutura da **Fase 5**. Vem
+**depois do PR2** (sem login, não há o que expor) e pode andar em paralelo ao PR3.
+
+- **0C.1 `DATABASE_URL` → Postgres do Supabase.** Pooler: `CONN_MAX_AGE`, sem
+  server-side cursors. Migrar os dados de dev existentes (ou recomeçar do `seed_demo` —
+  decidir na hora). A partir daqui **migrations rodam de um lugar só**.
+- **0C.2 Deploy do Django + Celery + Redis** (Fly/Railway/Render — 💡 sem pressa).
+  Um serviço web + um worker; Redis gerenciado.
+- **0C.3 Segurança de ambiente público:** `DEBUG=0`, `ALLOWED_HOSTS`/`CORS` reais,
+  HTTPS, secrets fora do repo. **Revisar o servidor MCP**: hoje é um container sem
+  autenticação — hospedado, ou fica atrás de credencial de serviço (a herdada do PR1)
+  ou não sobe.
+- **0C.4 IA por API** (depende de 0A.1 + 0A.3): provider comercial no ambiente
+  hospedado, com teto de custo e o `ia_indisponivel` já existente como degradação.
+- **0C.5 Frontend hospedado + onboarding mínimo:** o SPA aponta para a API pública, e o
+  testador entra por link. Landing e PWA seguem na Fase 5.
+
+> **Arquitetura do beta — "tudo no Supabase"** ✅ *(decidido em 24/07/2026; substitui a
+> decisão anterior de Postgres local por testador)*.
+>
+> **Supabase é Auth E banco**; o backend (Django + Celery + Redis) roda **hospedado**, e
+> o testador recebe um **link**. Nada roda na máquina dele.
+>
+> **Por que a mudança arrasta a hospedagem junto.** A alternativa — app local com banco
+> central — não se sustenta: a credencial do Postgres iria no `.env` de cada testador, e
+> o Django conecta com **um papel só, com acesso total a todas as tabelas**. Qualquer
+> testador abriria um `psql` e leria os dados de todo mundo. Isso vale registrar com
+> clareza: **o isolamento do PR1 é da camada de aplicação.** O manager que recusa
+> consulta sem escopo protege contra o *código* esquecer de filtrar; ele não é fronteira
+> de banco. Com a credencial na mão, o `dono` vira decoração — e pelo princípio 9 isso
+> é fraco demais para um invariante de segurança. Hospedando, a credencial fica no
+> servidor e o `dono` volta a ser a única porta.
+>
+> **Descartado:** RLS no Postgres (o banco impondo o isolamento) resolveria com app
+> local, e é a resposta nativa do Supabase — mas o Django conecta com um papel fixo, e
+> fazer claims por conexão brigando com pooling, mais workers Celery que não têm request
+> nenhum de onde tirar identidade, é um projeto à parte que ainda duplicaria a camada
+> `dono`. Reavaliar só se um dia houver fork local (Fase 8).
+>
+> **O que se ganha:** uma arquitetura só do beta ao produto (princípio 3); visibilidade
+> central da atividade dos testadores (era o ponto abdicado da decisão anterior);
+> backup e migrations num lugar só.
+>
+> **O que se paga:** custo mensal de hospedagem e de tokens de IA desde o beta; a IA
+> deixa de ser local (ver a nota de escopo da Fase 0); e some o argumento "seus dados
+> não saem da sua máquina", que passa a ser eventual bandeira do fork Tauri (Fase 8).
 
 ---
 
@@ -198,39 +279,54 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 
 ---
 
-## Fase 2 — Decisão da IA  💡  *(com dado da Fase 0)*
+## Fase 2 — Decisão da IA  ⏩  *(absorvida pela Fase 0 em 24/07/2026)*
 
-- Local é viável no hardware dos testadores? Se **não**, adotar **API comercial**
-  (Haiku-class / GPT-mini / Gemini Flash) como default quando hospedar.
-- Modelar custo (tokens × preço; por usuário ativo/mês). Manter o local como opção
-  "offline/privacidade" via o mesmo `LLMProvider`.
+> **A pergunta original morreu com a hospedagem.** Era "local é viável no hardware dos
+> testadores?" — mas hospedado não há hardware de testador para medir. A decisão virou
+> **API comercial no beta** (0C.4), pelo caminho que a 0A.1 abre.
 
----
+O que sobrevive desta fase e segue valendo:
 
-## Fase 3 — Endurecer a fundação p/ hospedar  ⏳  💡 *(gatilho: decidir hospedar / trazer leigos)*
-
-O grosso da fundação já foi no beta (Fase 0B). Aqui fica o que é específico de hospedar:
-
-- **3.1 Migrar `DATABASE_URL` p/ Postgres do Supabase** como banco único (pooler:
-  `CONN_MAX_AGE`, sem server-side cursors). *(Confirmado como o banco do produto.)*
-- **3.2 Revisar segurança** pra ambiente público (o Django deixa de rodar na máquina do
-  usuário; credenciais saem do cliente).
-- **3.3 Pagamento:** posição do gate `pode_usar` pronta pra ligar (Fase 6).
+- **Modelar custo** (tokens × preço; por usuário ativo/mês) — agora com o dado real da
+  instrumentação (0A.3), e é o que alimenta o preço da Fase 6.
+- **Escolher o provider comercial** específico (Haiku-class / GPT-mini / Gemini Flash).
+- Manter o **local como opção "offline/privacidade"** via o mesmo `LLMProvider` — hoje
+  isso é o fork Tauri (Fase 8), não mais o beta.
 
 ---
 
-## Fase 4 — Enxugar o stack local  ⏳  *(habilita empacotamento nativo; pode andar com Fase 1)*
+## Fase 3 — Endurecer a fundação p/ hospedar  ⏩  *(absorvida pela Fase 0 em 24/07/2026)*
+
+Hospedar deixou de ser um gatilho futuro: acontece no beta (**0C**).
+
+- ~~3.1 Migrar `DATABASE_URL` p/ Postgres do Supabase~~ → **0C.1**.
+- ~~3.2 Revisar segurança pra ambiente público~~ → **0C.3**.
+- **3.3 Pagamento:** posição do gate `pode_usar` pronta pra ligar (Fase 6) — já é o
+  **0B.8**, que segue no PR3.
+
+---
+
+## Fase 4 — Enxugar o stack local  ⏳  *(só serve ao Fork B agora)*
+
+> **Perdeu urgência em 24/07/2026.** Servia para o beta distribuído e para preparar o
+> nativo; com o beta hospedado, sobra só o segundo motivo. Se o Fork B (Fase 8) não
+> acontecer, esta fase inteira não acontece.
 
 - `RegraRecorrencia.dias`: `ArrayField` → `JSONField` (libera SQLite fora do Postgres).
 - Celery **eager** + cache **locmem** no perfil local (mata o Redis pro single-user).
 
 ---
 
-## Fase 5 — Deploy web hospedado  ⏳  *(o produto)*
+## Fase 5 — Produto público  ⏳  *(o produto)*
 
-- Django + Celery + Redis na nuvem (Fly/Railway/Render — 💡 sem pressa) + Supabase +
-  proxy da IA + frontend. Landing + onboarding. **PWA** (ícone + "instalar" sem loja).
-- A partir daqui, "mandar link" é a distribuição mais fácil — inclusive pra leigo.
+> **Encolheu em 24/07/2026:** a infraestrutura (Django + Celery + Redis na nuvem +
+> Supabase + frontend hospedado) virou **0C**, no beta. O que sobra aqui é o que
+> transforma uma instalação hospedada em **produto para leigo**:
+
+- **Landing + onboarding** de verdade (o beta tem só o mínimo do 0C.5).
+- **PWA** (ícone + "instalar" sem loja).
+- Endurecer para público aberto: signup sem curadoria, limites de abuso, suporte.
+- "Mandar link" já é a distribuição desde o beta — aqui ela passa a servir leigo.
 
 ---
 
@@ -268,21 +364,26 @@ O grosso da fundação já foi no beta (Fase 0B). Aqui fica o que é específico
 
 ## Trilha transversal — Distribuição (evolução)
 
+> **Simplificou em 24/07/2026.** O estágio 0 era "Docker + launcher por SO"; com o
+> beta hospedado, **link é a distribuição desde o começo** e o Fork A deixou de ser
+> uma bifurcação futura — virou o caminho principal.
+
 | Estágio | Como | Quando | Público |
 | --- | --- | --- | --- |
-| **0. Docker + scripts (+ Supabase Auth)** | `docker compose` + launcher por SO | **agora (ativa)** | amigos técnicos |
-| **1. Stack enxuto** | SQLite + sem Redis | Fase 4 | prepara o nativo |
-| **Fork A — Web hospedada + PWA** | mandar um link | Fase 5 | leigos e maioria |
+| **0. Web hospedada (Supabase + nuvem)** | mandar um link | **agora (ativa, 0C)** | amigos técnicos |
+| **1. Produto público + PWA** | link + landing + onboarding | Fase 5 | leigos e maioria |
 | **Fork B — Tauri nativo** | `.exe`/`.dmg`/`.AppImage` | Fase 8 | offline/privacidade |
+
+O **estágio "stack enxuto"** (SQLite, sem Redis — Fase 4) e o **Ollama local** deixam
+de servir ao beta e passam a existir só para o Fork B, se ele acontecer.
 
 ---
 
 ## Decisões em aberto  💡
 
-- ✅ **Dados de domínio no beta:** decidido — **Postgres local por testador** (ver
-  "Arquitetura do beta").
 - ✅ **Ordem 0A vs 0B:** decidido (24/07/2026) — **0B primeiro** (custo de atraso do
-  `dono`), quebrada em 4 PRs; 0A encaixa entre PRs.
+  `dono`), quebrada em 4 PRs. *(Revisto no mesmo dia: a 0A.1 deixou de ser encaixe e
+  virou pré-requisito do 0C.4.)*
 - ✅ **Identidade do agente** (0B.9): decidido — **ferramentas em processo**, sem HTTP e
   sem credencial. O MCP segue HTTP e ganha credencial de serviço própria.
 - ✅ **Threading do `dono` nos services** (0B.10): decidido — **parâmetro obrigatório**,
@@ -291,9 +392,21 @@ O grosso da fundação já foi no beta (Fase 0B). Aqui fica o que é específico
   admin** (Q3–Q6): decididos em 24/07/2026, no PR1 — PK local + `supabase_id` à parte;
   o perfil local **vira** a conta do usuário no 1º login; `FeriadoLocal` por-dono;
   admin global com `list_filter` por dono. Detalhe em `docs/tasks/contexto-0b-pr1.md`.
+- ✅ **Dados de domínio e arquitetura do beta:** decidido (24/07/2026) — **tudo no
+  Supabase** (Auth + Postgres) e **backend hospedado**. Substitui a decisão anterior
+  ("Postgres local por testador"): banco central com app local poria a credencial do
+  banco na máquina de cada testador, e o isolamento do PR1 é de aplicação, não de
+  banco. Ver "Arquitetura do beta".
+- ✅ **IA local vs API:** decidido por consequência — **API comercial** no beta
+  hospedado (0C.4). Não havia como manter a pergunta original: sem app na máquina do
+  testador, não há hardware variado para medir.
 - **Unificar `AGENTE_PROVIDER` e `LLM_PROVIDER`** num só env (0A.1) ou manter separados.
-- **IA local vs API** — aguarda dado da Fase 0.
+- **Provider comercial** específico (Haiku-class / GPT-mini / Gemini Flash) — decidir
+  na 0C.4, com o custo por usuário/mês da instrumentação (0A.3).
+- **Onde hospedar** (Fly/Railway/Render) — decidir na 0C.2. Deixou de ser "perto da
+  Fase 5"; agora é da Fase 0.
+- **Migrar os dados de dev ou recomeçar do `seed_demo`** ao apontar para o Supabase
+  (0C.1).
 - **Regras de negócio a mudar** — aguarda dogfooding (Fase 1).
-- **Hospedar (Fork A) vs desktop nativo (Fork B)** pros leigos — decidir após o beta.
-- **Provider comercial** específico e **modelo local** final (3b vs 7b).
-- **Hospedagem** (Fly/Railway/Render) — decidir perto da Fase 5.
+- **Fork B (Tauri) ainda faz sentido?** Era a resposta "offline/privacidade"; com tudo
+  na nuvem, é a única coisa que sustentaria essa bandeira — decidir após o beta.

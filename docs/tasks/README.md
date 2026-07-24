@@ -23,6 +23,15 @@ ponta, então o PR2 troca essencialmente *uma função*
 (`services/perfis.perfil_do_request`). O roteiro está na seção 8 de
 [`contexto-0b-pr1.md`](contexto-0b-pr1.md).
 
+Enquanto isso não destrava, a task de encaixe é a **0A.1** (abstração
+`LLMProvider`) — que deixou de ser opcional: virou pré-requisito da IA hospedada.
+
+> ⚠️ **O ROADMAP mudou em 24/07/2026, depois do PR1: "tudo no Supabase".** O beta
+> passou de não-hospedado (Postgres local por testador) para **hospedado, com o
+> Supabase como Auth e banco** — nova seção **0C**. O PR1 não foi afetado, mas o
+> que vem depois dele sim. Leia "Arquitetura do beta" no `ROADMAP.md` antes de
+> planejar qualquer task nova.
+
 ## Concluídas
 
 | Task | Contexto | Resumo |

@@ -8,6 +8,11 @@ Backend Django/DRF do **Planejador de Rotina** — roda via Docker, ainda **sem
 autenticação** (acesso só em `localhost`). Frontend é um repo separado (SPA Vite):
 <https://github.com/ThiagoMGLima/Planejador_Frontend>.
 
+> 🧭 **Para onde isso vai (decidido em 24/07/2026): "tudo no Supabase" + hospedado.**
+> O beta deixou de ser "cada testador roda a própria cópia": o Supabase passa a ser
+> **Auth e banco**, e o backend roda na nuvem (Fase 0C do `ROADMAP.md`). O
+> desenvolvimento local segue exatamente como está — este compose não muda.
+
 > ⚠️ **"Sem auth" ≠ "single-user".** O PR1 da Fase 0B já passou: existe o model
 > `Perfil`, os 8 models-raiz têm FK `dono` **obrigatória**, as constraints são
 > por-dono e **todo o caminho de dados já é multi-tenant**. O que falta é só *quem
