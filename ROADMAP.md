@@ -29,11 +29,36 @@
 
 ---
 
+## Método de trabalho (por task)
+
+Cada item deste ROADMAP percorre o mesmo ciclo. **1 task = 1 PR** (refina a
+convenção "1 marco = 1 PR" do `CLAUDE.md`):
+
+1. **Task** — pegar o próximo item na ordem definida abaixo.
+2. **Análise do código atual** — mapear o que a task toca de verdade (arquivos,
+   models, testes, efeitos colaterais) antes de propor qualquer coisa.
+3. **Plano de implementação** — nota de design em `docs/tasks/`, com as dúvidas
+   e decisões em aberto explicitadas.
+4. **Revisão + sanar dúvidas** — o plano é revisado e as dúvidas resolvidas
+   **juntos, antes de escrever código**. Nada de implementar sobre premissa não
+   confirmada.
+5. **Implementação.**
+6. **Testes** — suíte + lint + checagem de migrations verdes (ver `CLAUDE.md`).
+7. Se tudo ok → **próxima task**.
+
+---
+
 ## Fase 0 — Beta técnico com contas (Docker, não-hospedado + Supabase Auth)  🔜  *(ATIVA)*
 
 Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de produto/UX,
 (b) decidir **IA local vs API** com dado real, e (c) **testar contas + segurança do Auth**.
-Dois fluxos de trabalho em paralelo.
+
+> **Ordem decidida (24/07/2026): a 0B é a espinha, a 0A é encaixe.** A 0B tem **custo
+> de atraso** — o `dono` atravessa 8 models, ~340 linhas de serializers, ~820 de views,
+> ~2.600 de testes, 2 seeds e o servidor MCP; toda feature escrita antes dele vira
+> trabalho a mais dentro da 0B (é o princípio nº 2 aplicado). A 0A não cresce com o
+> tempo: são 3 pontos de chamada, e o padrão já existe pronto. Logo, **começar por
+> 0B.1-PR1** e encaixar a 0A entre PRs / enquanto a 0B estiver bloqueada por Supabase.
 
 ### 0A — Provider trocável + empacotamento
 - **0A.1 Abstração `LLMProvider`** em `planejamento_ia.py`: `gerar_diretrizes(contexto)
@@ -41,6 +66,12 @@ Dois fluxos de trabalho em paralelo.
   `MockProvider`, por env (`LLM_PROVIDER=ollama|api|mock`). `validar_diretrizes`
   (guarda-corpo) segue independente do provider. **Default `ollama`** (nada muda pra
   quem roda local).
+  > **Mais barato do que parece:** `services/agente.py:340-480` **já tem** esse padrão
+  > (`_OllamaProvider`, provider Anthropic, factory por `AGENTE_PROVIDER`) — só que
+  > para a forma *multi-turno com tool use*. Falta estendê-lo à forma *chamada única
+  > com JSON schema forçado*, nos 3 pontos que ainda instanciam `ollama.Client` direto:
+  > `planejamento_ia.py:199`, `cenarios.py:199` e `cenarios.py:278`. Considerar
+  > unificar `AGENTE_PROVIDER` e `LLM_PROVIDER` em vez de manter dois envs.
 - **0A.2 Empacotamento local:** auto-pull do modelo no boot + **profiles do compose**
   (`--profile local` sobe Ollama; `--profile api` não sobe).
 - **0A.3 Instrumentação:** logar tempo de parede real + (modo api) tokens.
@@ -49,6 +80,16 @@ Dois fluxos de trabalho em paralelo.
 - **0A.5 Teste de tamanho de modelo:** incluir `qwen2.5:3b` na matriz.
 
 ### 0B — Contas + autenticação (fundação, puxada pra frente)
+
+**Quebrado em 3 PRs** — a 0B inteira num PR é grande demais, e o primeiro **não
+depende do Supabase** (dá pra começar já):
+
+| PR | Escopo | Bloqueio externo |
+| --- | --- | --- |
+| **PR1** | `Perfil` + `dono` + isolamento + unicidade por-dono + seed por-usuário (0B.3–0B.6, 0B.9) — enquanto não há JWT, um **perfil local default** resolve o `request.user` | nenhum 🔜 **próxima task** |
+| **PR2** | `SupabaseJWTAuthentication` + provisionamento JIT (0B.1–0B.2) — troca só *quem* resolve o `request.user`; fica estreito porque o PR1 já isolou tudo | **exige o projeto Supabase criado** |
+| **PR3** | Conta demo semeada + gate `pode_usar` stub (0B.7–0B.8) | depende do PR2 |
+
 - **0B.1 Supabase Auth** (projeto compartilhado, na nuvem): login **Google + email**;
   frontend usa `supabase-js` só pro login e manda o JWT ao Django.
 - **0B.2 `SupabaseJWTAuthentication`** (DRF): valida o JWT (segredo/JWKS) + **provisiona
@@ -59,7 +100,18 @@ Dois fluxos de trabalho em paralelo.
 - **0B.5 Unicidade por-dono** (`Classe.nome`, `FeriadoLocal` deixam de ser globais);
   mixin de queryset filtrando por `request.user`; serializers gravam `dono` do request,
   nunca do cliente.
+  > ⚠️ **`PesoPreferencia.metrica` também é `unique=True` global** (`models.py:145`) e
+  > não estava nesta lista. Sem virar unicidade por-dono, o primeiro usuário a gravar
+  > um peso **trava o aprendizado de todos os outros**. Revisar `EscolhaCenario`,
+  > `RegistroExecucao` e o `uq_feriadolocal_data` com o mesmo olho.
 - **0B.6 Seed das 5 classes padrão** vira **por-usuário** (no Perfil, JIT) — não mais global.
+- **0B.9 Propagação de identidade para o agente e o MCP** (novo, entra no PR1).
+  `services/agente.py:50` e `mcp_server/server.py:38` montam URLs a partir de
+  `API_BASE_URL` e chamam a API **sem header de autenticação**. No instante em que a
+  auth entrar, os dois tomam **401** — e o agente roda **no worker Celery, fora do
+  request do usuário**, então precisa carregar o token de quem disparou o job (ou uma
+  credencial de serviço + `dono` explícito no payload da task). É decisão de desenho:
+  resolver junto com o mixin no PR1, não descobrir no PR2.
 - **0B.7 Conta default de teste + signup:** um usuário demo (credenciais compartilhadas)
   com `seed_demo` no escopo dele, pra o testador entrar e mexer na hora; **e** criação de
   contas novas próprias (testa signup + isolamento entre contas).
@@ -167,6 +219,11 @@ O grosso da fundação já foi no beta (Fase 0B). Aqui fica o que é específico
 
 - ✅ **Dados de domínio no beta:** decidido — **Postgres local por testador** (ver
   "Arquitetura do beta").
+- ✅ **Ordem 0A vs 0B:** decidido (24/07/2026) — **0B primeiro** (custo de atraso do
+  `dono`), quebrada em 3 PRs; 0A encaixa entre PRs.
+- **Identidade do agente/MCP nas chamadas HTTP** (0B.9): token do usuário propagado
+  pela task Celery **vs** credencial de serviço. Decidir no plano do PR1.
+- **Unificar `AGENTE_PROVIDER` e `LLM_PROVIDER`** num só env (0A.1) ou manter separados.
 - **IA local vs API** — aguarda dado da Fase 0.
 - **Regras de negócio a mudar** — aguarda dogfooding (Fase 1).
 - **Hospedar (Fork A) vs desktop nativo (Fork B)** pros leigos — decidir após o beta.

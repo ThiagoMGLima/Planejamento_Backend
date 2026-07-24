@@ -4,15 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Backend Django/DRF do **Planejador de Rotina** — projeto pessoal, **100% local e
-single-user**, roda via Docker, **sem autenticação** (acesso só em `localhost`).
-Desvio deliberado do handoff: os models NÃO têm FK `dono`; constraints que seriam
-por-dono são globais. Frontend é um repo separado (SPA Vite):
+Backend Django/DRF do **Planejador de Rotina** — hoje **100% local e single-user**,
+roda via Docker, **sem autenticação** (acesso só em `localhost`). Desvio deliberado
+do handoff: os models NÃO têm FK `dono`; constraints que seriam por-dono são globais.
+Frontend é um repo separado (SPA Vite):
 <https://github.com/ThiagoMGLima/Planejador_Frontend>.
 
-Convenção de trabalho: **1 marco = 1 PR**. Fonte da verdade do contrato:
-`Planejamento_Backend/Handoff de Backend - MVP.html`; plano: `PLAN.md`; notas de
-design em `Planejamento_Backend/docs/tasks/`.
+> ⚠️ **Isso está mudando.** O `ROADMAP.md` (projeto pessoal → produto) tem a **Fase 0B
+> ativa**, que introduz `Perfil`, `dono` e Supabase Auth. Antes de assumir "sem auth"
+> como permanente, confira o ROADMAP — o `dono` é a próxima task.
+
+Fontes da verdade: contrato em `Handoff de Backend - MVP.html`; plano do MVP em
+`PLAN.md`; mapa macro de produto em `ROADMAP.md`; notas de design em `docs/tasks/`.
+
+### Convenção de trabalho — ciclo por task
+
+**1 task = 1 PR**, e cada task percorre este ciclo (detalhe em `ROADMAP.md`,
+seção "Método de trabalho"):
+
+1. Task (próximo item do ROADMAP) → 2. **Análise do código atual** → 3. **Plano de
+implementação** em `docs/tasks/`, com as dúvidas explícitas → 4. **Revisão do usuário
++ sanar dúvidas** → 5. Implementação → 6. Testes → 7. Próxima task.
+
+O passo 4 é um **gate**: não escreva código de implementação antes de o plano ser
+revisado e as dúvidas resolvidas. Levante as dúvidas de uma vez, no plano, em vez de
+gotejá-las durante a implementação.
 
 ## Layout
 
@@ -25,7 +41,7 @@ sessão pode abrir um nível acima.)
 ## Comandos
 
 ```bash
-# subir tudo (db, redis, ollama, web, celery) — entrypoint do web faz migrate + collectstatic
+# subir tudo (db, redis, ollama, web, celery, mcp) — entrypoint do web faz migrate + collectstatic
 docker compose up --build
 
 # baixar o modelo da IA uma vez (a IA é opcional; ver IA abaixo)
@@ -35,6 +51,16 @@ docker compose exec ollama ollama pull qwen2.5:7b-instruct
 docker compose exec web python manage.py seed_demo --clear           # variado, com histórico
 docker compose exec web python manage.py seed_planejamento --clear    # grande, futuro, p/ exercitar o planejador
 ```
+
+Os dois seeds **não convivem**: `--clear` zera tarefas/eventos, então rodar um
+substitui o dataset do outro. Sem `--clear` eles **acumulam** (não são idempotentes).
+
+> **Máquina sem GPU AMD:** o serviço `ollama` do compose está fixado em ROCm
+> (`ollama/ollama:rocm`, `/dev/kfd`, `group_add: 990`) para a RX 7600 do desktop. Em
+> máquina sem `/dev/kfd` o serviço não sobe — e o `web` depende dele, então a stack
+> inteira trava. Solução: um `docker-compose.override.yml` local (gitignorado) com a
+> imagem de CPU e `devices: !reset []` / `group_add: !reset []` — o `!reset` é
+> obrigatório porque listas em override são **concatenadas**, não substituídas.
 
 ### Testes e lint — ATENÇÃO
 
@@ -70,8 +96,12 @@ import circular); por isso `montar_plano`/`serializar_plano` vivem em services,
 compartilhados pela view `/calcular` e pela task Celery.
 
 ### Models (`planner/models.py`)
-`Classe`, `Tarefa` (Inbox), `Evento` (calendário), `RegraRecorrencia`,
-`Ocorrencia`. Dois invariantes que atravessam o código:
+Núcleo (MVP): `Classe`, `Tarefa` (Inbox), `Evento` (calendário), `RegraRecorrencia`,
+`Ocorrencia`. Da Fase C: `PesoPreferencia` (peso aprendido por métrica de cenário,
+EWMA), `EscolhaCenario` (lote cru de cenários + qual foi escolhido, permite recalcular
+o aprendizado do zero), `RegistroExecucao` (alimenta os fatores adaptativos) e
+`FeriadoLocal` (feriados municipais mantidos à mão). Todos herdam de
+`TimestampedModel`. Dois invariantes que atravessam o código:
 - **`PENDENTE` é derivado na leitura, nunca gravado** (status efetivo calculado em
   `services/completion.py`).
 - **Ocorrências de eventos recorrentes são virtuais**: só existe linha `Ocorrencia`
@@ -99,26 +129,64 @@ compartilhados pela view `/calcular` e pela task Celery.
   `max_min_por_dia`, `max_min_por_dia_total`) que realimentam o solver, buscando
   uma rotina mais "humana" (distribuir esforço, suavizar picos). `estimar_tempo_s`
   alimenta o endpoint de estimativa.
+- `cenarios.py` — gera 3–4 cenários com trade-offs e o **refino conversacional**
+  (Marcos C1b/C5). Tem 2 dos 3 pontos que ainda chamam `ollama.Client` direto.
+- `adaptacao.py` — aprende `PesoPreferencia` por **escolha revelada** (EWMA). Os pesos
+  **ordenam e sugerem** cenários, nunca filtram.
+- `replanejamento.py` — replaneja do agora em diante; simula (plano + diff) ou aplica,
+  substituindo as sessões futuras.
+- `agente.py` — agente conversacional com **tool use multi-turno** (Marco C7). Já tem a
+  abstração de provider (`_OllamaProvider` / Anthropic + factory por `AGENTE_PROVIDER`)
+  que a Fase 0A.1 vai estender ao resto. Chama a própria API por HTTP via
+  `settings.API_BASE_URL` — **sem header de auth** (ver 0B.9 no ROADMAP).
+- `aplicacao.py` — persiste as sessões do plano revisado (`/aplicar`).
+- `tempos.py` — estimativa adaptativa de duração dos jobs de IA (Marco C6).
 
-### Fluxo assíncrono do planejamento por IA
-`POST /planejamento/planejar-ia` valida síncrono e enfileira `planejar_ia_task`
-(`planner/tasks.py`, único job real) → responde 202 `{job_id}` (ou 200 se já em
-cache). O front faz polling em `GET /planejamento/planejar-ia/{job_id}`. Resultado
-é cacheado no Redis pela chave `(tarefa_ids + prefs efetivas + plano base)`. Se o
-Ollama falhar ou `IA_PLANEJAMENTO_ENABLED=0`, degrada para o plano base do solver
-com `ia_indisponivel: true`.
+### Fluxo assíncrono (Celery)
+`planner/tasks.py` tem **4 jobs**: `planejar_ia_task`, `gerar_cenarios_task`,
+`refinar_cenario_task` e `agente_chat_task`. Todos seguem o mesmo padrão: a view valida
+síncrono e enfileira → responde **202 `{job_id}`** (ou 200 se já em cache) → o front faz
+polling no `GET .../{job_id}`. Resultado cacheado no Redis por uma chave derivada da
+entrada (no planejar-ia: `tarefa_ids + prefs efetivas + plano base`). Se o Ollama falhar
+ou `IA_PLANEJAMENTO_ENABLED=0` / `AGENTE_ENABLED=0`, degrada para o plano base do solver
+com `ia_indisponivel: true` — **a IA nunca é caminho crítico**.
 
 ## Convenções da API
 
 Rotas do router (`/classes/`, `/tarefas/`, `/eventos/`) exigem **barra final**;
-`/classes/` e `/tarefas/` são paginadas por cursor, as demais retornam arrays. As
-rotas avulsas (`/health`, `/pendentes`, `/feriados`, `/planejamento/*`) são
-`path()` sem barra final.
+`/classes/` e `/tarefas/` são paginadas por cursor. As rotas avulsas (`/health`,
+`/pendentes`, `/feriados`, `/planejamento/*`) são `path()` **sem** barra final.
+
+Formatos de resposta: `/eventos/` e `/pendentes` retornam **arrays**; `/feriados`
+retorna um **objeto** `{ano, feriados: [...]}`. Ações do router: `promover` e
+`planejar` em `/tarefas/{id}/`, `concluir` e `remarcar` em `/eventos/{id}/`
+(`?escopo=ocorrencia|serie`).
+
+Em `/planejamento/` há 4 famílias: `calcular`/`aplicar` (síncronas), `planejar-ia`
+(+`estimativa`, +`{job_id}`), `cenarios` (+`escolher`, `refinar`, `{job_id}`) e
+`agente/chat` (+`{job_id}`), além de `replanejar` (+`aplicar`). **Ordem importa em
+`urls.py`**: `cenarios/refinar` vem antes de `cenarios/<job_id>`, senão casaria como
+job_id.
 
 ## IA / Ollama
 
-Roda em **CPU** por padrão (`qwen2.5:7b-instruct`), na casa de dezenas de segundos
-por plano; o modelo fica residente (`OLLAMA_KEEP_ALIVE=-1`) para evitar cold start.
-Variáveis: `IA_PLANEJAMENTO_ENABLED`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`,
-`OLLAMA_TIMEOUT`; calibração da estimativa: `PLANEJAR_TEMPO_BASE_S`,
-`PLANEJAR_TEMPO_POR_TAREFA_S`. Ver `.env.example`.
+O compose roda o Ollama na **GPU AMD via ROCm** (RX 7600 / gfx1102, commit `cc2a130`:
+7,4 → 47 tok/s). Em máquina sem `/dev/kfd` cai para CPU via override (ver Comandos), na
+casa de dezenas de segundos por plano. O modelo fica residente
+(`OLLAMA_KEEP_ALIVE=-1`) para evitar cold start.
+
+Variáveis (ver `.env.example`):
+- **Planejamento:** `IA_PLANEJAMENTO_ENABLED`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`
+  (default `qwen2.5:7b-instruct`), `OLLAMA_TIMEOUT`.
+- **Estimativa:** `PLANEJAR_TEMPO_BASE_S`, `PLANEJAR_TEMPO_POR_TAREFA_S`.
+- **Agente:** `AGENTE_ENABLED`, `AGENTE_PROVIDER` (`ollama|anthropic`), `AGENTE_MODEL`,
+  `ANTHROPIC_API_KEY`, `API_BASE_URL` (no worker precisa alcançar o `web`:
+  `http://web:8000/api/v1`).
+- **Feriados:** `FERIADOS_UF` (camada estadual offline; vazio desliga).
+
+## Servidor MCP
+
+O serviço `mcp` do compose (`mcp_server/`, fora do Django) expõe as ferramentas do
+backend via Model Context Protocol em `http://localhost:8765/mcp` — camada fina sobre a
+API HTTP, **zero lógica de domínio**. Como o `agente.py`, chama a API por `API_BASE_URL`
+sem autenticação.

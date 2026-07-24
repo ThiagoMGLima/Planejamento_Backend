@@ -8,9 +8,13 @@ e **sem autenticação** (acesso só em `localhost`).
   — consome esta API; configure a origem dele em `CORS_ALLOWED_ORIGINS`.
 - **Contrato de implementação:** `Handoff de Backend - MVP.html` (fonte da verdade).
 - **Plano de execução:** `PLAN.md` (4 marcos, um PR cada).
+- **Mapa de produto:** `ROADMAP.md` — a evolução de projeto pessoal para produto,
+  com o método de trabalho por task.
 - **Desvios deliberados do handoff** (por ser local/single-user): sem JWT, sem
   endpoints `/auth/*`, sem `IsAuthenticated`/`IsOwner`, sem FK `dono` nos models
   e sem filtro de queryset por dono.
+  > Em revisão: a **Fase 0B do `ROADMAP.md`** (ativa) traz `Perfil`, `dono` e
+  > Supabase Auth de volta, para o beta com amigos técnicos.
 
 ## Status
 
@@ -29,6 +33,19 @@ MVP (Fase 1) completo — 4 marcos:
 **Fase A — Planejamento (solver + IA)** ✅ planejador de produção multitarefa
 (solver EDF guloso, com cascata de relaxamento) e camada de IA opcional via
 Ollama local que aperfeiçoa o plano. Ver abaixo.
+
+**Fase C — Rotina inteligente** ✅ (visão em `docs/tasks/visao-rotina-inteligente.md`)
+
+- **C1a/C1b** — vocabulário do solver e pipeline de **cenários** com trade-offs;
+  aprendizado de `PesoPreferencia` por escolha revelada (EWMA).
+- **C2** — **replanejar** do agora em diante (simular com diff, ou aplicar).
+- **C3** — `RegistroExecucao` alimentando os fatores adaptativos.
+- **C4/C7** — **servidor MCP** + **agente conversacional** com tool use.
+- **C5** — refino conversacional de cenários.
+- **C6** — estimativa adaptativa da duração dos jobs de IA.
+- **C8** — feriados regionais (estadual por UF, offline + municipal manual).
+
+**Próximo:** Fase 0B do `ROADMAP.md` — `Perfil`, `dono` e Supabase Auth.
 
 ## Planejamento (solver + IA)
 
@@ -58,11 +75,29 @@ Requer Docker.
 
 ```bash
 cp .env.example .env        # ajuste SECRET_KEY se quiser
-docker compose up --build   # sobe db, redis, ollama, web e celery
+docker compose up --build   # sobe db, redis, ollama, web, celery e mcp
 ```
 
 O entrypoint do `web` aguarda o Postgres, aplica `migrate` (criando as 5 classes
 padrão) e roda `collectstatic`.
+
+> **Máquina sem GPU AMD.** O serviço `ollama` está fixado em ROCm para a RX 7600
+> (`/dev/kfd`, `group_add: 990`). Onde não existe `/dev/kfd` ele não sobe — e como o
+> `web` depende dele, a stack trava. Crie um `docker-compose.override.yml` local
+> (deixe-o fora do git) para cair na imagem de CPU:
+>
+> ```yaml
+> services:
+>   ollama:
+>     image: ollama/ollama
+>     devices: !reset []
+>     group_add: !reset []
+>     environment: !override
+>       OLLAMA_KEEP_ALIVE: "-1"
+> ```
+>
+> O `!reset` é necessário: listas em override são **concatenadas**, não substituídas.
+> Em CPU, considere `OLLAMA_MODEL=qwen2.5:3b-instruct` (~1.9 GB) no lugar do 7b.
 
 Para usar a IA, baixe o modelo uma vez (a IA é opcional — desligue com
 `IA_PLANEJAMENTO_ENABLED=0` para entregar só o plano base do solver):
@@ -87,6 +122,9 @@ docker compose exec web python manage.py seed_demo --clear           # dataset v
 docker compose exec web python manage.py seed_planejamento --clear    # dataset grande, futuro, p/ exercitar o planejador
 ```
 
+Os dois seeds **não convivem** — `--clear` zera tarefas e eventos, então rodar um
+substitui o dataset do outro. Sem `--clear` eles **acumulam** (não são idempotentes).
+
 ## Endpoints (base `/api/v1/`)
 
 | Método | Rota | Descrição |
@@ -109,12 +147,20 @@ docker compose exec web python manage.py seed_planejamento --clear    # dataset 
 | POST | `/planejamento/cenarios` | 3–4 cenários com trade-offs → 202 `{job_id}` (ou 200 se em cache) |
 | GET | `/planejamento/cenarios/{job_id}` | Estado/resultado do job de cenários |
 | POST | `/planejamento/cenarios/escolher` | Grava a escolha (aprende pesos); `aplicar=true` persiste o plano |
+| POST | `/planejamento/cenarios/refinar` | Refino conversacional de um cenário → 202 `{job_id}` |
+| GET | `/planejamento/cenarios/refinar/{job_id}` | Estado/resultado do job de refino |
+| POST | `/planejamento/agente/chat` | Agente conversacional (tool use) → 202 `{job_id}` |
+| GET | `/planejamento/agente/chat/{job_id}` | Estado/resultado do turno do agente |
 | POST | `/planejamento/replanejar` | Replaneja do agora em diante (simulação: plano + diff) |
 | POST | `/planejamento/replanejar/aplicar` | Recalcula e persiste (substitui as sessões futuras) |
 
 Listas de `/classes/` e `/tarefas/` são paginadas por cursor (`{next, previous,
-results}`); `/eventos`, `/pendentes` e `/feriados` retornam arrays. Rotas do
-router exigem **barra no final**.
+results}`); `/eventos/` e `/pendentes` retornam arrays; `/feriados` retorna um
+**objeto** `{ano, feriados: [...]}`. Rotas do router exigem **barra no final**; as
+avulsas (`/health`, `/pendentes`, `/feriados`, `/planejamento/*`) são **sem** barra.
+
+A janela de `/eventos/?inicio&fim` exige datas **tz-aware** (com offset), ex.
+`2026-07-20T00:00:00-03:00` — data nua devolve 400.
 
 ## Servidor MCP (agente conversacional)
 
@@ -168,3 +214,11 @@ Ver `.env.example`. Principais: `SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`,
 Planejamento por IA: `IA_PLANEJAMENTO_ENABLED` (1/0), `OLLAMA_BASE_URL`,
 `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`. Calibração da estimativa de tempo (opcionais,
 com default): `PLANEJAR_TEMPO_BASE_S`, `PLANEJAR_TEMPO_POR_TAREFA_S`.
+
+Agente conversacional: `AGENTE_ENABLED` (1/0), `AGENTE_PROVIDER`
+(`ollama` local | `anthropic` remoto), `AGENTE_MODEL`, `ANTHROPIC_API_KEY` e
+`API_BASE_URL` — esta última precisa alcançar o `web` **de dentro do worker Celery**
+(no compose: `http://web:8000/api/v1`, e `web` tem de estar em `ALLOWED_HOSTS`).
+
+Feriados regionais: `FERIADOS_UF` (camada estadual offline via lib `holidays`; vazio
+desliga). Os municipais ficam no admin, em *Feriados locais*.
