@@ -58,7 +58,11 @@ convenção "1 marco = 1 PR" do `CLAUDE.md`):
    confirmada.
 5. **Implementação.**
 6. **Testes** — suíte + lint + checagem de migrations verdes (ver `CLAUDE.md`).
-7. Se tudo ok → **próxima task**.
+7. **Documento de contexto** em `docs/tasks/contexto-<task>.md` — o que era para
+   fazer, o que foi feito, decisões, bugs encontrados e como corrigidos, e o estado
+   em que a próxima task começa. **O contexto do agente é zerado entre tasks**, então
+   este documento é o único fio. Índice em `docs/tasks/README.md`.
+8. Se tudo ok → **próxima task**.
 
 ---
 

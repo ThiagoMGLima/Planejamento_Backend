@@ -24,11 +24,24 @@ seção "Método de trabalho"):
 
 1. Task (próximo item do ROADMAP) → 2. **Análise do código atual** → 3. **Plano de
 implementação** em `docs/tasks/`, com as dúvidas explícitas → 4. **Revisão do usuário
-+ sanar dúvidas** → 5. Implementação → 6. Testes → 7. Próxima task.
++ sanar dúvidas** → 5. Implementação → 6. Testes → 7. **Documento de contexto** da
+task → 8. Próxima task.
 
 O passo 4 é um **gate**: não escreva código de implementação antes de o plano ser
 revisado e as dúvidas resolvidas. Levante as dúvidas de uma vez, no plano, em vez de
 gotejá-las durante a implementação.
+
+O passo 7 existe porque **o contexto é zerado entre tasks**: cada uma fecha com
+`docs/tasks/contexto-<task>.md` registrando o que era para fazer, o que foi feito,
+as decisões de desenho, os bugs encontrados e como foram corrigidos, e o estado em
+que a próxima task começa. Índice em `docs/tasks/README.md`.
+
+### Onde olhar primeiro (agente sem contexto)
+
+1. `docs/tasks/README.md` — índice das notas, e qual é a task ativa.
+2. `ROADMAP.md` — a ordem das tasks e os princípios (o **nº 9** rege decisões de
+   isolamento/segurança).
+3. O `contexto-*.md` da última task concluída — onde o trabalho parou e por quê.
 
 ## Layout
 
