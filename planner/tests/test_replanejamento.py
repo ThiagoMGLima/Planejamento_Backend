@@ -35,6 +35,7 @@ def _tarefa_promovida(esforco=120, deadline=None, **kw):
 
 def _sessao(tarefa, inicio, fim, status=Evento.Status.AGENDADO):
     return EventoFactory(
+        dono=tarefa.dono,
         titulo=tarefa.titulo,
         classe=tarefa.classe,
         inicio=inicio,
@@ -49,7 +50,7 @@ def _sessao(tarefa, inicio, fim, status=Evento.Status.AGENDADO):
 # Serviço                                                                      #
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db
-def test_passado_e_concluido_congelam_so_futuras_substituidas():
+def test_passado_e_concluido_congelam_so_futuras_substituidas(perfil):
     t = _tarefa_promovida(esforco=360)
     passada = _sessao(t, aware(2026, 5, 29, 8), aware(2026, 5, 29, 10))
     concluida = _sessao(
@@ -57,7 +58,7 @@ def test_passado_e_concluido_congelam_so_futuras_substituidas():
     )
     futura = _sessao(t, aware(2026, 6, 3, 8), aware(2026, 6, 3, 10))
 
-    rp = R.replanejar(agora=SEG)
+    rp = R.replanejar(perfil, agora=SEG)
     ids = {ev.id for ev in rp.substituiveis}
     assert futura.id in ids
     assert passada.id not in ids
@@ -65,18 +66,18 @@ def test_passado_e_concluido_congelam_so_futuras_substituidas():
 
 
 @pytest.mark.django_db
-def test_esforco_restante_bate_com_as_sessoes_substituidas():
+def test_esforco_restante_bate_com_as_sessoes_substituidas(perfil):
     t = _tarefa_promovida(esforco=600)  # esforço original NÃO é o que conta
     _sessao(t, aware(2026, 6, 2, 8), aware(2026, 6, 2, 10))  # 120
     _sessao(t, aware(2026, 6, 3, 8), aware(2026, 6, 3, 9, 30))  # 90
 
-    rp = R.replanejar(agora=SEG)
+    rp = R.replanejar(perfil, agora=SEG)
     assert sum(s.dur_min for s in rp.res.sessoes) == 210
     assert rp.res.nao_alocado == []
 
 
 @pytest.mark.django_db
-def test_sessoes_substituidas_nao_se_autobloqueiam():
+def test_sessoes_substituidas_nao_se_autobloqueiam(perfil):
     # Semana toda ocupada por eventos fixos 08–22, EXCETO o slot da própria
     # sessão futura (ter 08–10): o plano novo dentro da janela só fecha se
     # aquele slot for reutilizável (sem a exclusão, cairia na madrugada).
@@ -91,7 +92,7 @@ def test_sessoes_substituidas_nao_se_autobloqueiam():
     t = _tarefa_promovida(esforco=120, deadline=aware(2026, 6, 5, 18))
     _sessao(t, aware(2026, 6, 2, 8), aware(2026, 6, 2, 10))
 
-    rp = R.replanejar(agora=SEG)
+    rp = R.replanejar(perfil, agora=SEG)
     assert rp.res.nao_alocado == []
     assert [(s.inicio, s.fim) for s in rp.res.sessoes] == [
         (aware(2026, 6, 2, 8), aware(2026, 6, 2, 10))  # o mesmo slot, reutilizado
@@ -99,12 +100,12 @@ def test_sessoes_substituidas_nao_se_autobloqueiam():
 
 
 @pytest.mark.django_db
-def test_hoje_nao_esvazia_o_dia_e_o_diff_explica():
+def test_hoje_nao_esvazia_o_dia_e_o_diff_explica(perfil):
     t = _tarefa_promovida(esforco=240, deadline=aware(2026, 6, 5, 18))
     _sessao(t, aware(2026, 6, 1, 9), aware(2026, 6, 1, 11))  # hoje
     _sessao(t, aware(2026, 6, 2, 9), aware(2026, 6, 2, 11))
 
-    rp = R.replanejar(agora=SEG, dias_bloqueados=["2026-06-01"])
+    rp = R.replanejar(perfil, agora=SEG, dias_bloqueados=["2026-06-01"])
     assert all(s.inicio.date().isoformat() != "2026-06-01" for s in rp.res.sessoes)
     assert sum(s.dur_min for s in rp.res.sessoes) == 240
     entrada = rp.diff[str(t.id)]
@@ -112,15 +113,15 @@ def test_hoje_nao_esvazia_o_dia_e_o_diff_explica():
 
 
 @pytest.mark.django_db
-def test_inbox_elegivel_entra_no_pool():
+def test_inbox_elegivel_entra_no_pool(perfil):
     t = TarefaFactory(esforco_estimado=60, deadline=aware(2026, 6, 3, 18))  # INBOX
-    rp = R.replanejar(agora=SEG)
+    rp = R.replanejar(perfil, agora=SEG)
     assert sum(s.dur_min for s in rp.res.sessoes if s.tarefa_id == str(t.id)) == 60
 
 
 @pytest.mark.django_db
-def test_sem_nada_para_replanejar_devolve_vazio():
-    rp = R.replanejar(agora=SEG)
+def test_sem_nada_para_replanejar_devolve_vazio(perfil):
+    rp = R.replanejar(perfil, agora=SEG)
     assert rp.res.sessoes == []
     assert rp.diff == {}
     assert rp.substituiveis == []
@@ -158,33 +159,36 @@ def test_diff_planos_cobre_todos_os_casos():
 # Aplicar (transação)                                                          #
 # --------------------------------------------------------------------------- #
 def _agenda(t):
-    return sorted((ev.inicio, ev.fim) for ev in Evento.objects.filter(origem_tarefa=t))
+    return sorted(
+        (ev.inicio, ev.fim)
+        for ev in Evento.objects.do_dono(t.dono).filter(origem_tarefa=t)
+    )
 
 
 @pytest.mark.django_db
-def test_aplicar_substitui_futuras_e_preserva_passado():
+def test_aplicar_substitui_futuras_e_preserva_passado(perfil):
     t = _tarefa_promovida(esforco=360)
     passada = _sessao(t, aware(2026, 5, 29, 8), aware(2026, 5, 29, 10))
     futura = _sessao(t, aware(2026, 6, 3, 8), aware(2026, 6, 3, 10))
 
-    rp, criados, removidos = R.aplicar_replanejamento(agora=SEG)
+    rp, criados, removidos = R.aplicar_replanejamento(perfil, agora=SEG)
     assert removidos == 1
     assert criados == len(rp.res.sessoes) > 0
-    assert Evento.objects.filter(id=passada.id).exists()
-    assert not Evento.objects.filter(id=futura.id).exists()
-    novos = Evento.objects.filter(origem_tarefa=t, inicio__gte=SEG)
+    assert Evento.objects.do_dono(perfil).filter(id=passada.id).exists()
+    assert not Evento.objects.do_dono(perfil).filter(id=futura.id).exists()
+    novos = Evento.objects.do_dono(perfil).filter(origem_tarefa=t, inicio__gte=SEG)
     assert all(ev.origem_tarefa_id == t.id for ev in novos)  # origem preservada
 
 
 @pytest.mark.django_db
-def test_aplicar_e_idempotente_para_o_mesmo_estado():
+def test_aplicar_e_idempotente_para_o_mesmo_estado(perfil):
     t = _tarefa_promovida(esforco=240)
     _sessao(t, aware(2026, 6, 2, 8), aware(2026, 6, 2, 10))
     _sessao(t, aware(2026, 6, 3, 8), aware(2026, 6, 3, 10))
 
-    R.aplicar_replanejamento(agora=SEG)
+    R.aplicar_replanejamento(perfil, agora=SEG)
     primeira = _agenda(t)
-    rp, criados, removidos = R.aplicar_replanejamento(agora=SEG)
+    rp, criados, removidos = R.aplicar_replanejamento(perfil, agora=SEG)
     assert _agenda(t) == primeira  # mesmo estado ⇒ mesma agenda
     assert criados == removidos  # trocou igual por igual
 
@@ -193,10 +197,10 @@ def test_aplicar_e_idempotente_para_o_mesmo_estado():
 # Endpoints                                                                    #
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db
-def test_endpoint_replanejar_simula_sem_persistir(api):
+def test_endpoint_replanejar_simula_sem_persistir(api, perfil):
     t = _tarefa_promovida(esforco=120)
     _sessao(t, aware(2026, 6, 2, 8), aware(2026, 6, 2, 10))
-    antes = Evento.objects.count()
+    antes = Evento.objects.do_dono(perfil).count()
 
     resp = api.post(
         "/api/v1/planejamento/replanejar",
@@ -205,11 +209,11 @@ def test_endpoint_replanejar_simula_sem_persistir(api):
     )
     assert resp.status_code == 200
     assert {"plano", "diff", "metricas", "metricas_vs_anterior"} <= set(resp.data)
-    assert Evento.objects.count() == antes  # nada persistido
+    assert Evento.objects.do_dono(perfil).count() == antes  # nada persistido
 
 
 @pytest.mark.django_db
-def test_endpoint_aplicar_persiste_e_reporta(api):
+def test_endpoint_aplicar_persiste_e_reporta(api, perfil):
     t = _tarefa_promovida(esforco=120)
     _sessao(t, aware(2026, 6, 2, 8), aware(2026, 6, 2, 10))
 
@@ -221,9 +225,11 @@ def test_endpoint_aplicar_persiste_e_reporta(api):
     assert resp.status_code == 200
     assert resp.data["eventos_removidos"] == 1
     assert resp.data["eventos_criados"] >= 1
-    assert not Evento.objects.filter(
-        origem_tarefa=t, inicio__date="2026-06-02"
-    ).exists()
+    assert (
+        not Evento.objects.do_dono(perfil)
+        .filter(origem_tarefa=t, inicio__date="2026-06-02")
+        .exists()
+    )
 
 
 @pytest.mark.django_db

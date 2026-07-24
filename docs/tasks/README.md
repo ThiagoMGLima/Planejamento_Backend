@@ -15,15 +15,19 @@ Dois tipos de documento:
 
 ## Task ativa
 
-**Fase 0B / PR1 — `Perfil`, `dono` e default invertido.**
-Plano: [`fase0b-pr1-dono.md`](fase0b-pr1-dono.md).
-🚧 **Bloqueado nas dúvidas Q3–Q6** (seção 5 do plano) — todas com sugestão,
-aguardando o aval do usuário.
+**Fase 0B / PR2 — Supabase Auth (0B.1/0B.2).**
+🚧 **Bloqueado: exige o projeto Supabase criado** — isso é do usuário.
+
+O PR1 deixou este PR estreito de propósito: o backend já é multi-tenant ponta a
+ponta, então o PR2 troca essencialmente *uma função*
+(`services/perfis.perfil_do_request`). O roteiro está na seção 8 de
+[`contexto-0b-pr1.md`](contexto-0b-pr1.md).
 
 ## Concluídas
 
 | Task | Contexto | Resumo |
 | --- | --- | --- |
+| **0B / PR1** — `Perfil`, `dono` e default invertido | [`contexto-0b-pr1.md`](contexto-0b-pr1.md) | `Perfil` + FK `dono` nos 8 models-raiz, unicidade por-dono e um manager que **recusa consulta sem escopo**; 39 testes novos de isolamento com dois perfis |
 | **0B / PR0** — views finas + agente em processo | [`contexto-0b-pr0.md`](contexto-0b-pr0.md) | Regra saiu das views para `services/tarefas.py` e `services/agenda.py`; as ferramentas do agente deixaram de falar HTTP com a própria API |
 
 ## Planos e visões anteriores (Fases A e C, já implementadas)

@@ -4,15 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Backend Django/DRF do **Planejador de Rotina** — hoje **100% local e single-user**,
-roda via Docker, **sem autenticação** (acesso só em `localhost`). Desvio deliberado
-do handoff: os models NÃO têm FK `dono`; constraints que seriam por-dono são globais.
-Frontend é um repo separado (SPA Vite):
+Backend Django/DRF do **Planejador de Rotina** — roda via Docker, ainda **sem
+autenticação** (acesso só em `localhost`). Frontend é um repo separado (SPA Vite):
 <https://github.com/ThiagoMGLima/Planejador_Frontend>.
 
-> ⚠️ **Isso está mudando.** O `ROADMAP.md` (projeto pessoal → produto) tem a **Fase 0B
-> ativa**, que introduz `Perfil`, `dono` e Supabase Auth. Antes de assumir "sem auth"
-> como permanente, confira o ROADMAP — o `dono` é a próxima task.
+> ⚠️ **"Sem auth" ≠ "single-user".** O PR1 da Fase 0B já passou: existe o model
+> `Perfil`, os 8 models-raiz têm FK `dono` **obrigatória**, as constraints são
+> por-dono e **todo o caminho de dados já é multi-tenant**. O que falta é só *quem
+> diz quem é o usuário*: `services/perfis.perfil_do_request()` devolve sempre o
+> perfil local, e o PR2 troca isso pelo JWT do Supabase.
+>
+> Consequência prática para quem escreve código aqui: **`Evento.objects.all()`
+> levanta `EscopoAusente`**. Ver "Escopo por dono" abaixo antes de escrever
+> qualquer query.
 
 Fontes da verdade: contrato em `Handoff de Backend - MVP.html`; plano do MVP em
 `PLAN.md`; mapa macro de produto em `ROADMAP.md`; notas de design em `docs/tasks/`.
@@ -108,26 +112,64 @@ services importam só de `models`/outros services — **nunca de `views`** (evit
 import circular); por isso `montar_plano`/`serializar_plano` vivem em services,
 compartilhados pela view `/calcular` e pela task Celery.
 
+### Escopo por dono (`planner/managers.py`) — leia antes de escrever query
+
+O manager default dos 8 models-raiz **recusa consulta sem escopo**. Não é estilo:
+é o invariante de isolamento entre contas, no nível "falha no teste" em vez de
+"convenção documentada" (princípio 9 do `ROADMAP.md`).
+
+```python
+Evento.objects.do_dono(perfil).filter(...)   # o caminho normal
+Evento.objects.sem_escopo().filter(...)      # varredura global — só seeds e admin
+Evento.objects.all()                         # levanta EscopoAusente
+```
+
+Três consequências que pegam de surpresa:
+
+- **`do_dono(None)` levanta** — nunca vira "sem filtro".
+- Os **related managers reversos** herdam a guarda: `tarefa.eventos.all()` também
+  levanta. Use `Evento.objects.do_dono(...).filter(origem_tarefa=tarefa)`.
+- `create()` é livre: quem barra escrita sem dono é o `NOT NULL` do banco.
+
+A identidade é **parâmetro do domínio, nunca ambiente**: os services recebem
+`dono` como argumento obrigatório (nada de `contextvar` — no worker Celery ele
+seria `None`, o filtro sumiria em silêncio e a suíte, que roda com um perfil só,
+passaria verde). Quem resolve o dono é `services/perfis.perfil_do_request()`.
+
 ### Models (`planner/models.py`)
-Núcleo (MVP): `Classe`, `Tarefa` (Inbox), `Evento` (calendário), `RegraRecorrencia`,
-`Ocorrencia`. Da Fase C: `PesoPreferencia` (peso aprendido por métrica de cenário,
-EWMA), `EscolhaCenario` (lote cru de cenários + qual foi escolhido, permite recalcular
-o aprendizado do zero), `RegistroExecucao` (alimenta os fatores adaptativos) e
-`FeriadoLocal` (feriados municipais mantidos à mão). Todos herdam de
-`TimestampedModel`. Dois invariantes que atravessam o código:
+`Perfil` (a conta) e, com FK `dono` **obrigatória** para ele, os 8 models-raiz:
+`Classe`, `Tarefa` (Inbox), `Evento` (calendário), `RegraRecorrencia`,
+`PesoPreferencia` (peso aprendido por métrica de cenário, EWMA), `EscolhaCenario`
+(lote cru de cenários + qual foi escolhido, permite recalcular o aprendizado do
+zero), `RegistroExecucao` (alimenta os fatores adaptativos) e `FeriadoLocal`
+(feriados municipais mantidos à mão). `Ocorrencia` é a única sem `dono`: herda
+pelo `evento` (CASCADE, não-nulo). Todos herdam de `TimestampedModel`.
+
+Três invariantes que atravessam o código:
 - **`PENDENTE` é derivado na leitura, nunca gravado** (status efetivo calculado em
   `services/completion.py`).
 - **Ocorrências de eventos recorrentes são virtuais**: só existe linha `Ocorrencia`
   quando o usuário toca aquela data (conclui/remarca/pula). Expansão sob demanda.
+- **Unicidade é sempre por-dono** (`Classe.nome`, `PesoPreferencia.metrica`,
+  `FeriadoLocal`): global, elas impediriam a segunda conta de existir.
 
 ### Services
+
+Salvo `recurrence.py`, `tempos.py` e as funções puras do solver, **todo service que
+toca o banco recebe `dono` como primeiro parâmetro obrigatório**.
+
+- `perfis.py` — quem é o dono: `perfil_do_request()` (o ponto que o PR2 troca),
+  `perfil_local()` e `seed_classes_padrao()` (as 5 classes padrão, que na 0B.6
+  saíram da migration 0002 para cá — no migrate não havia para quem semear).
 - `recurrence.py` — expande recorrência em ocorrências virtuais via `dateutil.rrule`,
   SEMPRE dentro de uma janela limitada (nunca série infinita). Reusado por
   `EventoViewSet.list` e pelo planejador.
 - `completion.py` — deriva `PENDENTE`; `concluir`/`remarcar` são as únicas
   transições de escrita (remarcar devolve a `Tarefa` de origem ao Inbox).
 - `holidays.py` — feriados via BrasilAPI no servidor, cache agressivo + cópia stale
-  para sobreviver a falhas externas.
+  para sobreviver a falhas externas. `feriados_do_ano(ano, dono)`: nacional e
+  estadual são **fatos globais** (cache compartilhado entre perfis, chamada externa
+  cara amortizada); só a camada municipal (`FeriadoLocal`, do DB) é por-dono.
 - `planejamento.py` — **solver** de produção multitarefa (guloso EDF + anti-conflito
   + cascata de relaxamento). **Função pura, não persiste** (persistir é do
   `/aplicar`). As preferências são SUAVES: se não couber na janela antes da
@@ -151,7 +193,10 @@ o aprendizado do zero), `RegistroExecucao` (alimenta os fatores adaptativos) e
 - `agente.py` — agente conversacional com **tool use multi-turno** (Marco C7). Já tem a
   abstração de provider (`_OllamaProvider` / Anthropic + factory por `AGENTE_PROVIDER`)
   que a Fase 0A.1 vai estender ao resto. As ferramentas chamam os **services em
-  processo** (PR0 da Fase 0B) — antes era `requests` contra a própria API.
+  processo** (PR0 da Fase 0B) — antes era `requests` contra a própria API. Cada
+  ferramenta recebe `dono` como primeiro **posicional** e o dispatch o passa por fora
+  do `**tc.args`: o que o modelo escolhe e a identidade de quem conversa chegam por
+  caminhos diferentes, então nenhuma saída do LLM troca o dono dos dados.
 - `tarefas.py` — `promover`/`planejar`/`criar` (regra que morava dentro das views).
 - `agenda.py` — janela de eventos expandida e pendentes. **Devolve objetos de
   domínio, não DTOs**: assim `services/` não importa `serializers`, e cada consumidor
@@ -163,8 +208,9 @@ o aprendizado do zero), `RegistroExecucao` (alimenta os fatores adaptativos) e
 `planner/tasks.py` tem **4 jobs**: `planejar_ia_task`, `gerar_cenarios_task`,
 `refinar_cenario_task` e `agente_chat_task`. Todos seguem o mesmo padrão: a view valida
 síncrono e enfileira → responde **202 `{job_id}`** (ou 200 se já em cache) → o front faz
-polling no `GET .../{job_id}`. Resultado cacheado no Redis por uma chave derivada da
-entrada (no planejar-ia: `tarefa_ids + prefs efetivas + plano base`). Se o Ollama falhar
+polling no `GET .../{job_id}`. Todos recebem `dono_id` como **primeiro argumento** do
+payload. Resultado cacheado no Redis por uma chave derivada da entrada (no planejar-ia:
+`dono + tarefa_ids + prefs efetivas + plano base`). Se o Ollama falhar
 ou `IA_PLANEJAMENTO_ENABLED=0` / `AGENTE_ENABLED=0`, degrada para o plano base do solver
 com `ia_indisponivel: true` — **a IA nunca é caminho crítico**.
 
@@ -184,6 +230,13 @@ Em `/planejamento/` há 4 famílias: `calcular`/`aplicar` (síncronas), `planeja
 `agente/chat` (+`{job_id}`), além de `replanejar` (+`aplicar`). **Ordem importa em
 `urls.py`**: `cenarios/refinar` vem antes de `cenarios/<job_id>`, senão casaria como
 job_id.
+
+**Job não é credencial.** Todo endpoint que dereferencia um `job_id` confere a posse
+(`views._registrar_dono_job` / `_job_do_dono`, chave `job_dono:{id}` no cache) e
+responde **404** se o job for de outro perfil ou desconhecido. Enfileirou um job? tem
+de registrar o dono junto — inclusive no caminho de cache-hit, que cria um `job_id`
+novo. Objeto de outro perfil também é **404**, e FK cruzada é **400 "inexistente"**:
+a resposta não deve deixar distinguir "não existe" de "existe e não é seu".
 
 ## IA / Ollama
 
@@ -206,6 +259,9 @@ Variáveis (ver `.env.example`):
 O serviço `mcp` do compose (`mcp_server/`, fora do Django) expõe as ferramentas do
 backend via Model Context Protocol em `http://localhost:8765/mcp` — camada fina sobre a
 API HTTP, **zero lógica de domínio**. Chama a API por `API_BASE_URL`, hoje sem
-autenticação. É a **única** fronteira HTTP que sobra (o agente passou a chamar os
-services em processo); por ser container separado servindo clientes externos, é ali
-que entra a credencial de serviço da Fase 0B.
+autenticação, e portanto opera no perfil local (é quem a API resolve). É a **única**
+fronteira HTTP que sobra — o agente passou a chamar os services em processo.
+
+A credencial de serviço prevista para ele **fica no PR2**, não por esquecimento: não há
+o que autenticar enquanto a API não tem autenticação nenhuma. Ela chega junto com o
+`SupabaseJWTAuthentication`, no mesmo PR que inverte o `DEFAULT_PERMISSION_CLASSES`.

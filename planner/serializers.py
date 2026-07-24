@@ -10,9 +10,29 @@ import re
 from rest_framework import serializers
 
 from .models import Classe, Evento, RegraRecorrencia, Tarefa
+from .services import perfis
 from .services.planejamento import HORIZONTES
 
 COR_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+class ClasseDoDonoField(serializers.PrimaryKeyRelatedField):
+    """`classe_id` restrito às classes de quem está fazendo a requisição.
+
+    Substitui os 4 `PrimaryKeyRelatedField(queryset=Classe.objects.all())` que
+    existiam aqui. Aquilo era o vazamento mais fácil de deixar passar: sem
+    escopo, um usuário anexa a **classe de outro** ao próprio evento — e o DRF
+    responde 201, porque do ponto de vista dele o id existe.
+
+    Escopado, a classe alheia simplesmente não está no queryset e a resposta é
+    400 "objeto inexistente" — que também é a mensagem certa: quem pergunta não
+    deve conseguir distinguir "não existe" de "existe e não é seu".
+    """
+
+    def get_queryset(self):
+        # Sobrescrever `get_queryset` dispensa o argumento `queryset` no
+        # __init__ (o DRF detecta o override) — é o gancho por-requisição.
+        return Classe.objects.do_dono(perfis.perfil_do_request(self.context["request"]))
 
 
 class ClasseSerializer(serializers.ModelSerializer):
@@ -37,8 +57,7 @@ class ClasseSerializer(serializers.ModelSerializer):
 class TarefaSerializer(serializers.ModelSerializer):
     # Leitura aninhada da classe; escrita por id.
     classe = ClasseSerializer(read_only=True)
-    classe_id = serializers.PrimaryKeyRelatedField(
-        queryset=Classe.objects.all(),
+    classe_id = ClasseDoDonoField(
         source="classe",
         write_only=True,
         required=False,
@@ -90,9 +109,7 @@ class RegraRecorrenciaSerializer(serializers.ModelSerializer):
 
 class EventoSerializer(serializers.ModelSerializer):
     classe = ClasseSerializer(read_only=True)
-    classe_id = serializers.PrimaryKeyRelatedField(
-        queryset=Classe.objects.all(), source="classe", write_only=True
-    )
+    classe_id = ClasseDoDonoField(source="classe", write_only=True)
     regra_recorrencia = RegraRecorrenciaSerializer(required=False, allow_null=True)
     origem_tarefa = serializers.PrimaryKeyRelatedField(read_only=True)
     status_efetivo = serializers.SerializerMethodField()
@@ -154,8 +171,10 @@ class EventoSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         regra_data = validated_data.pop("regra_recorrencia", None)
         if regra_data:
+            # `dono` chega em validated_data pelo `perform_create` da view; a
+            # regra herda o do evento que a criou.
             validated_data["regra_recorrencia"] = RegraRecorrencia.objects.create(
-                **regra_data
+                dono=validated_data["dono"], **regra_data
             )
         return super().create(validated_data)
 
@@ -170,7 +189,7 @@ class EventoSerializer(serializers.ModelSerializer):
                 instance.regra_recorrencia.save()
             else:
                 instance.regra_recorrencia = RegraRecorrencia.objects.create(
-                    **regra_data
+                    dono=instance.dono, **regra_data
                 )
         return super().update(instance, validated_data)
 
@@ -180,9 +199,7 @@ class PromoverSerializer(serializers.Serializer):
 
     inicio = serializers.DateTimeField()
     fim = serializers.DateTimeField(required=False)
-    classe_id = serializers.PrimaryKeyRelatedField(
-        queryset=Classe.objects.all(), source="classe", required=False
-    )
+    classe_id = ClasseDoDonoField(source="classe", required=False)
 
     def validate(self, attrs):
         inicio = attrs.get("inicio")
@@ -212,9 +229,7 @@ class PlanejarSerializer(serializers.Serializer):
     """
 
     sessoes = PlanejarSessaoSerializer(many=True)
-    classe_id = serializers.PrimaryKeyRelatedField(
-        queryset=Classe.objects.all(), source="classe", required=False
-    )
+    classe_id = ClasseDoDonoField(source="classe", required=False)
 
     def validate_sessoes(self, value):
         if not value:

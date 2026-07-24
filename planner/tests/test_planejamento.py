@@ -351,7 +351,7 @@ def test_defaults_neutros_nao_mudam_o_plano():
 # Eventos ocupados (precisa de DB)                                             #
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db
-def test_intervalos_ocupados_inclui_simples_e_recorrentes():
+def test_intervalos_ocupados_inclui_simples_e_recorrentes(perfil):
     # Evento simples na seg 01/06.
     EventoFactory(inicio=aware(2026, 6, 1, 9), fim=aware(2026, 6, 1, 11))
     # Evento recorrente semanal às segundas (01/06 e 08/06 no horizonte).
@@ -361,7 +361,7 @@ def test_intervalos_ocupados_inclui_simples_e_recorrentes():
         fim=aware(2026, 6, 1, 16),
         regra_recorrencia=regra,
     )
-    ocupado = P.intervalos_ocupados(aware(2026, 6, 1), aware(2026, 6, 15))
+    ocupado = P.intervalos_ocupados(perfil, aware(2026, 6, 1), aware(2026, 6, 15))
     # 1 simples + 2 ocorrências recorrentes (seg 01 e seg 08).
     assert (aware(2026, 6, 1, 9), aware(2026, 6, 1, 11)) in ocupado
     assert (aware(2026, 6, 1, 14), aware(2026, 6, 1, 16)) in ocupado
@@ -369,14 +369,14 @@ def test_intervalos_ocupados_inclui_simples_e_recorrentes():
 
 
 @pytest.mark.django_db
-def test_montar_plano_aplica_diretrizes_de_cenario():
+def test_montar_plano_aplica_diretrizes_de_cenario(perfil):
     tarefa = TarefaFactory(esforco_estimado=60, deadline=aware(2026, 6, 5, 18))
     diretrizes = {
         "janela_por_dia": {"3": ["08:00", "20:00"]},
         "usar_fds": True,
         "dias_bloqueados": ["2026-06-02"],
     }
-    res = P.montar_plano([tarefa], SEG, {}, diretrizes)
+    res = P.montar_plano(perfil, [tarefa], SEG, {}, diretrizes)
     # Normalização interna (minutos/dates) + echo transparente no shape da API.
     assert res.prefs.janela_por_dia == {"3": (8 * 60, 20 * 60)}
     assert res.prefs.usar_fds is True

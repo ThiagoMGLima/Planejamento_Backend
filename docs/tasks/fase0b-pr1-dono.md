@@ -246,32 +246,47 @@ conferem posse. Hoje a proteção é o `job_id` ser um UUID difícil de adivinha
 
 ---
 
-## 5. Dúvidas em aberto
+## 5. Dúvidas — todas resolvidas (24/07/2026)
 
-> ✅ **Q1 (threading do `dono`)** e **Q2 (identidade do agente/MCP)** foram
-> **respondidas em 24/07/2026** e viraram as seções 3.2 e 3.3. Restam Q3–Q6.
+> ✅ **Q1 (threading do `dono`)** e **Q2 (identidade do agente/MCP)** viraram as
+> seções 3.2 e 3.3. **Q3–Q6 respondidas pelo usuário em 24/07/2026** — registradas
+> abaixo com a decisão. O gate do passo 4 do ciclo está **liberado**.
 
-**Q3. Identidade do `Perfil` no PR1.** O PR2 quer PK = UUID do Supabase. No PR1 não
-há Supabase. Gero um UUID local e no PR2 reconcilio (migration que troca a PK, ou uma
-coluna `supabase_id` separada)? **Sugiro `supabase_id` nulo separado da PK** — troca
-de PK com 8 FKs apontando é migration cara e arriscada.
+**Q3. Identidade do `Perfil` no PR1.** → **PK é UUID local; `supabase_id` é coluna
+nula e separada**, preenchida no PR2.
 
-**Q4. Dados existentes.** Sua base de dev tem o `seed_demo` (23 tarefas, 28 eventos).
-Backfill para o perfil local resolve o PR1. Quando o PR2 chegar e você logar com
-Google, esse perfil local vira o seu (associando o `supabase_id` ao perfil existente)
-ou vira uma conta nova e os dados de dev ficam órfãos? A 1ª é mais amigável; a 2ª é
-mais limpa e testa melhor o fluxo de conta nova.
+Verificado antes de decidir: **o Supabase não está implementado** — aparece só na
+documentação (`ROADMAP.md`, `CLAUDE.md`, os dois planos), zero código. Não há
+`Perfil`, não há `request.user`, não há dependência de JWT, e as 6 migrations
+existentes não têm nada de auth. Logo o PR1 resolve identidade sozinho.
 
-**Q5. `FeriadoLocal` por-dono vs catálogo global.** A migration `0006` semeia o
-feriado de Curitiba globalmente. Feriado municipal é *fato do município*, não do
-usuário — replicá-lo por conta é redundante. Duas leituras: (i) por-dono como manda
-o 0B.5, cada usuário mantém a lista dele; (ii) global com um campo de município,
-compartilhado. **Sugiro (i) agora** (mais simples, e o 0B.5 já decidiu), deixando
-(ii) para quando houver seleção de município — mas quero seu aval porque é o único
-item onde o ROADMAP e a natureza do dado divergem.
+O motivo da escolha é concreto: assim que o PR1 fechar, a PK do `Perfil` está
+referenciada por 8 FKs. Trocá-la no PR2 seria reescrever 8 tabelas numa migration
+com dados reais dentro; com a coluna separada, o PR2 vira um `UPDATE` de uma coluna.
 
-**Q6. Admin.** Filtra por dono, ou continua visão global de superuser? **Sugiro
-global** — é ferramenta de operador e você é o único a usar.
+**Q4. Dados existentes.** → **O perfil local vira a conta do usuário.** O backfill
+atribui o `seed_demo` (23 tarefas, 28 eventos) ao perfil local, e no PR2 o primeiro
+login **preenche o `supabase_id` desse perfil** em vez de criar conta nova. O usuário
+também é cliente do produto: não há "conta de admin" separada da "conta de uso" — é
+a mesma, e o superuser do Django é só uma credencial de acesso ao painel, em paralelo.
+Isto depende diretamente da Q3: com PK trocável, esse fluxo seria uma cirurgia.
+
+**Q5. `FeriadoLocal`.** → **Por-dono, como manda o 0B.5.** Cada usuário mantém a
+própria lista; a redundância (mesmo feriado municipal repetido por conta) é aceitável
+enquanto não houver seleção de município. O catálogo global com campo de município
+fica para quando essa seleção existir.
+
+**Q6. Admin.** → **Escopado por perfil, via `list_filter`.** O usuário pediu ver um
+perfil por vez ("app pessoal; se precisar ver de outros, entro na conta deles").
+
+A leitura literal — admin que só enxerga um perfil — exigiria inventar a noção de
+"perfil atual" que o Django admin não tem: guardar a seleção na sessão, um seletor no
+topo, escopar cada `ModelAdmin` nisso. Máquina nova só para o painel. A solução
+adotada é `list_filter = ["dono"]` + coluna `dono` na listagem: escolhe-se o perfil na
+barra lateral e trabalha-se numa conta por vez, que é o modo de trabalho pedido, ao
+custo de três linhas por `ModelAdmin`. Investigar o bug de um testador vira trocar o
+filtro, não trocar de conta. O admin segue usando `sem_escopo()` por baixo — o
+isolamento que importa é o da API.
 
 ---
 

@@ -31,16 +31,17 @@ class ResultadoReplanejamento:
     metricas_vs_anterior: dict
 
 
-def _sessoes_futuras(agora):
+def _sessoes_futuras(dono, agora):
     """Sessões aplicadas ainda por acontecer (o passado e o concluído congelam)."""
     return list(
-        Evento.objects.filter(origem_tarefa__isnull=False, inicio__gte=agora)
+        Evento.objects.do_dono(dono)
+        .filter(origem_tarefa__isnull=False, inicio__gte=agora)
         .exclude(status=Evento.Status.CONCLUIDO)
         .select_related("origem_tarefa")
     )
 
 
-def _pool_e_substituiveis(agora, futuras):
+def _pool_e_substituiveis(dono, agora, futuras):
     """Tarefas a replanejar + sessões que serão substituídas.
 
     - tarefa PROMOVIDA com sessões futuras: esforço = Σ minutos dessas sessões;
@@ -75,7 +76,7 @@ def _pool_e_substituiveis(agora, futuras):
             )
         )
 
-    inbox = Tarefa.objects.filter(
+    inbox = Tarefa.objects.do_dono(dono).filter(
         status=Tarefa.Status.INBOX,
         deadline__isnull=False,
         esforco_estimado__gt=0,
@@ -87,7 +88,7 @@ def _pool_e_substituiveis(agora, futuras):
     return pool, substituiveis
 
 
-def _res_vazio(agora, preferencias):
+def _res_vazio(dono, agora, preferencias):
     prefs, usadas = planejamento.montar_preferencias(preferencias or {})
     return planejamento.ResultadoPlano(
         sessoes=[],
@@ -98,6 +99,7 @@ def _res_vazio(agora, preferencias):
         ocupado=[],
         agora=agora,
         horizonte_fim=agora,
+        dono=dono,
     )
 
 
@@ -124,10 +126,11 @@ def _res_anterior(res, substituiveis, agora):
         ocupado=[],
         agora=agora,
         horizonte_fim=res.horizonte_fim,
+        dono=res.dono,
     )
 
 
-def replanejar(agora=None, dias_bloqueados=None, preferencias=None):
+def replanejar(dono, agora=None, dias_bloqueados=None, preferencias=None):
     """Recalcula o plano do `agora` em diante. PURO — não persiste.
 
     1. sessões futuras aplicadas (origem_tarefa, inicio ≥ agora, ≠ CONCLUIDO);
@@ -138,11 +141,11 @@ def replanejar(agora=None, dias_bloqueados=None, preferencias=None):
     5. diff + métricas contra o plano anterior.
     """
     agora = agora or timezone.now()
-    futuras = _sessoes_futuras(agora)
-    pool, substituiveis = _pool_e_substituiveis(agora, futuras)
+    futuras = _sessoes_futuras(dono, agora)
+    pool, substituiveis = _pool_e_substituiveis(dono, agora, futuras)
 
     if not pool:
-        res = _res_vazio(agora, preferencias)
+        res = _res_vazio(dono, agora, preferencias)
         vazio = cenarios.metricas_do_plano(res)
         return ResultadoReplanejamento(
             res, {}, [], vazio, cenarios.normalizar(vazio, vazio)
@@ -156,6 +159,7 @@ def replanejar(agora=None, dias_bloqueados=None, preferencias=None):
             ]
         }
     res = planejamento.montar_plano(
+        dono,
         pool,
         agora,
         preferencias,
@@ -226,19 +230,23 @@ def diff_planos(sessoes_antigas, sessoes_novas):
     return diff
 
 
-def aplicar_replanejamento(agora=None, dias_bloqueados=None, preferencias=None):
+def aplicar_replanejamento(dono, agora=None, dias_bloqueados=None, preferencias=None):
     """Recalcula E persiste, numa transação: remove as sessões futuras
     substituídas e cria as novas (origem_tarefa preservado via aplicar_sessoes).
     Retorna (ResultadoReplanejamento, eventos_criados, eventos_removidos).
     """
     with transaction.atomic():
-        rp = replanejar(agora, dias_bloqueados, preferencias)
+        rp = replanejar(dono, agora, dias_bloqueados, preferencias)
         removidos = [ev.id for ev in rp.substituiveis]
-        Evento.objects.filter(id__in=removidos).delete()
+        # O delete mais perigoso do backend. Os ids saem de `substituiveis`, que
+        # já veio escopado — o `do_dono` aqui é o cinto de segurança para o dia
+        # em que alguém passar ids de outra origem.
+        Evento.objects.do_dono(dono).filter(id__in=removidos).delete()
         criados = aplicacao.aplicar_sessoes(
+            dono,
             [
                 {"tarefa_id": s.tarefa_id, "inicio": s.inicio, "fim": s.fim}
                 for s in rp.res.sessoes
-            ]
+            ],
         )
     return rp, len(criados), len(removidos)

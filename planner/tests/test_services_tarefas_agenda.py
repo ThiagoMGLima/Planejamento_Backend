@@ -56,11 +56,11 @@ def test_promover_fim_explicito_vence_o_esforco():
 
 
 @pytest.mark.django_db
-def test_promover_sem_classe_nenhuma_levanta():
+def test_promover_sem_classe_nenhuma_levanta(perfil):
     tarefa = TarefaFactory(classe=None)
     with pytest.raises(ValueError):
         tarefas.promover(tarefa, inicio=aware(2026, 7, 6, 8))
-    assert not Evento.objects.exists()  # transação não deixou lixo
+    assert not Evento.objects.do_dono(perfil).exists()  # transação não deixou lixo
 
 
 @pytest.mark.django_db
@@ -86,47 +86,47 @@ def test_planejar_cria_um_evento_por_sessao():
 
 
 @pytest.mark.django_db
-def test_planejar_sem_classe_nao_cria_nada():
+def test_planejar_sem_classe_nao_cria_nada(perfil):
     tarefa = TarefaFactory(classe=None)
     with pytest.raises(ValueError):
         tarefas.planejar(
             tarefa,
             sessoes=[{"inicio": aware(2026, 7, 6, 8), "fim": aware(2026, 7, 6, 9)}],
         )
-    assert not Evento.objects.exists()
+    assert not Evento.objects.do_dono(perfil).exists()
 
 
 @pytest.mark.django_db
-def test_criar_tarefa_com_classe_inexistente_levanta_classe_desconhecida():
+def test_criar_tarefa_com_classe_inexistente_levanta_classe_desconhecida(perfil):
     with pytest.raises(tarefas.ClasseDesconhecida):
-        tarefas.criar("X", classe_id="00000000-0000-0000-0000-000000000000")
+        tarefas.criar(perfil, "X", classe_id="00000000-0000-0000-0000-000000000000")
 
 
 @pytest.mark.django_db
-def test_criar_tarefa_com_classe_id_que_nem_e_uuid_levanta_o_mesmo_erro():
+def test_criar_tarefa_com_classe_id_que_nem_e_uuid_levanta_o_mesmo_erro(perfil):
     """O 7B às vezes manda o *nome* da classe no lugar do id: `pk=` levanta
     ValidationError (não DoesNotExist), e quem chama precisa do mesmo erro."""
     with pytest.raises(tarefas.ClasseDesconhecida):
-        tarefas.criar("X", classe_id="Estudar")
+        tarefas.criar(perfil, "X", classe_id="Estudar")
 
 
 @pytest.mark.django_db
-def test_criar_tarefa_recusa_titulo_vazio():
+def test_criar_tarefa_recusa_titulo_vazio(perfil):
     with pytest.raises(ValueError):
-        tarefas.criar("   ")
+        tarefas.criar(perfil, "   ")
 
 
 @pytest.mark.django_db
-def test_criar_tarefa_recusa_esforco_zero():
+def test_criar_tarefa_recusa_esforco_zero(perfil):
     with pytest.raises(ValueError):
-        tarefas.criar("X", esforco_min=0)
+        tarefas.criar(perfil, "X", esforco_min=0)
 
 
 @pytest.mark.django_db
-def test_criar_tarefa_grava_e_normaliza():
-    classe = Classe.objects.get(nome="Estudar")
+def test_criar_tarefa_grava_e_normaliza(perfil):
+    classe = Classe.objects.do_dono(perfil).get(nome="Estudar")
     tarefa = tarefas.criar(
-        "  Lista 4  ", classe_id=str(classe.id), esforco_min=60, descricao="ok"
+        perfil, "  Lista 4  ", classe_id=str(classe.id), esforco_min=60, descricao="ok"
     )
     assert tarefa.titulo == "Lista 4"  # strip
     assert tarefa.classe == classe
@@ -145,20 +145,20 @@ def test_janela_invertida_e_grande_demais_sao_recusadas():
 
 
 @pytest.mark.django_db
-def test_eventos_na_janela_ordena_pelo_inicio_efetivo():
+def test_eventos_na_janela_ordena_pelo_inicio_efetivo(perfil):
     EventoFactory(
         titulo="tarde", inicio=aware(2026, 7, 6, 15), fim=aware(2026, 7, 6, 16)
     )
     EventoFactory(titulo="manhã", inicio=aware(2026, 7, 6, 8), fim=aware(2026, 7, 6, 9))
 
-    itens = agenda.eventos_na_janela(aware(2026, 7, 6), aware(2026, 7, 7))
+    itens = agenda.eventos_na_janela(perfil, aware(2026, 7, 6), aware(2026, 7, 7))
 
     assert [i.evento.titulo for i in itens] == ["manhã", "tarde"]
     assert all(i.ocorrencia is None for i in itens)  # nenhum é recorrente
 
 
 @pytest.mark.django_db
-def test_eventos_na_janela_expande_recorrente_sem_materializar():
+def test_eventos_na_janela_expande_recorrente_sem_materializar(perfil):
     regra = RegraRecorrenciaFactory(tipo="SEMANAL", dias=[0])  # segundas
     EventoFactory(
         titulo="Cálculo",
@@ -167,7 +167,7 @@ def test_eventos_na_janela_expande_recorrente_sem_materializar():
         regra_recorrencia=regra,
     )
 
-    itens = agenda.eventos_na_janela(aware(2026, 7, 6), aware(2026, 7, 28))
+    itens = agenda.eventos_na_janela(perfil, aware(2026, 7, 6), aware(2026, 7, 28))
 
     assert [i.ocorrencia.data.isoformat() for i in itens] == [
         "2026-07-06",
@@ -180,14 +180,14 @@ def test_eventos_na_janela_expande_recorrente_sem_materializar():
 
 
 @pytest.mark.django_db
-def test_eventos_fora_da_janela_ficam_de_fora():
+def test_eventos_fora_da_janela_ficam_de_fora(perfil):
     EventoFactory(inicio=aware(2026, 8, 1, 8), fim=aware(2026, 8, 1, 9))
-    itens = agenda.eventos_na_janela(aware(2026, 7, 6), aware(2026, 7, 7))
+    itens = agenda.eventos_na_janela(perfil, aware(2026, 7, 6), aware(2026, 7, 7))
     assert itens == []
 
 
 @pytest.mark.django_db
-def test_pendentes_so_traz_rastreavel_agendado_e_vencido():
+def test_pendentes_so_traz_rastreavel_agendado_e_vencido(perfil):
     agora = timezone.now()
     vencido = EventoFactory(
         titulo="vencido",
@@ -218,4 +218,4 @@ def test_pendentes_so_traz_rastreavel_agendado_e_vencido():
         status=Evento.Status.CONCLUIDO,
     )
 
-    assert [e.id for e in agenda.pendentes(agora)] == [vencido.id]
+    assert [e.id for e in agenda.pendentes(perfil, agora)] == [vencido.id]

@@ -105,8 +105,8 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 | PR | Escopo | Bloqueio externo |
 | --- | --- | --- |
 | **PR0** | **Views finas + agente em processo** (0B.9) — pré-requisito estrutural, ver abaixo | ✅ **feito** |
-| **PR1** | `Perfil` + `dono` + **default invertido** + unicidade por-dono + seed por-usuário (0B.3–0B.6, 0B.10) — enquanto não há JWT, um **perfil local default** resolve o `request.user` | nenhum 🔜 **próxima task** |
-| **PR2** | `SupabaseJWTAuthentication` + provisionamento JIT (0B.1–0B.2) — troca só *quem* resolve o `request.user`; fica estreito porque o PR1 já isolou tudo | **exige o projeto Supabase criado** |
+| **PR1** | `Perfil` + `dono` + **default invertido** + unicidade por-dono + seed por-usuário (0B.3–0B.6, 0B.10) — enquanto não há JWT, um **perfil local default** resolve o `request.user` | ✅ **feito** |
+| **PR2** | `SupabaseJWTAuthentication` + provisionamento JIT (0B.1–0B.2) — troca só *quem* resolve o `request.user`; fica estreito porque o PR1 já isolou tudo. Herdou do PR1 a **credencial de serviço do MCP**: não há o que autenticar antes de existir autenticação | 🔜 **próxima task** — **exige o projeto Supabase criado** |
 | **PR3** | Conta demo semeada + gate `pode_usar` stub (0B.7–0B.8) | depende do PR2 |
 
 > **Por que um PR0.** A análise do PR1 (`docs/tasks/fase0b-pr1-dono.md`) mostrou que
@@ -121,18 +121,22 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   frontend usa `supabase-js` só pro login e manda o JWT ao Django.
 - **0B.2 `SupabaseJWTAuthentication`** (DRF): valida o JWT (segredo/JWKS) + **provisiona
   o Perfil (JIT)** no 1º acesso.
-- **0B.3 `Perfil`/`Conta`** (PK = UUID do usuário Supabase; `plano`, `trial_ate`, prefs).
-- **0B.4 `dono = FK(Perfil)`** nos models-raiz (Classe, Tarefa, Evento, RegraRecorrencia,
-  PesoPreferencia, EscolhaCenario, RegistroExecucao, FeriadoLocal); filhos herdam pelo pai.
-- **0B.5 Unicidade por-dono** (`Classe.nome`, `FeriadoLocal` deixam de ser globais);
-  serializers gravam `dono` do request, **nunca do cliente** — e o `queryset` dos
-  `PrimaryKeyRelatedField` também é escopado (sem isso, um usuário anexa a **classe de
-  outro** ao próprio evento: 4 pontos em `serializers.py`).
-  > ⚠️ **`PesoPreferencia.metrica` também é `unique=True` global** (`models.py:145`) e
-  > não estava nesta lista. Sem virar unicidade por-dono, o primeiro usuário a gravar
-  > um peso **trava o aprendizado de todos os outros**. Revisar `EscolhaCenario`,
-  > `RegistroExecucao` e o `uq_feriadolocal_data` com o mesmo olho.
-- **0B.6 Seed das 5 classes padrão** vira **por-usuário** (no Perfil, JIT) — não mais global.
+- **0B.3 `Perfil`/`Conta`** — ✅ feito no PR1. **PK é um UUID local** e o id do Supabase
+  mora em `supabase_id`, coluna à parte (decisão Q3): 8 FKs apontam para a PK, então
+  trocá-la no PR2 seria reescrever 8 tabelas com dados dentro. Campos: `email`, `nome`,
+  `plano`, `trial_ate`.
+- **0B.4 `dono = FK(Perfil)`** — ✅ feito no PR1, nos 8 models-raiz (Classe, Tarefa,
+  Evento, RegraRecorrencia, PesoPreferencia, EscolhaCenario, RegistroExecucao,
+  FeriadoLocal). Só `Ocorrencia` herda pelo pai.
+- **0B.5 Unicidade por-dono** — ✅ feito no PR1 nos **três** casos: `Classe.nome`,
+  `PesoPreferencia.metrica` e `FeriadoLocal`. Os serializers gravam `dono` do request,
+  **nunca do cliente**, e o `queryset` dos `PrimaryKeyRelatedField` é escopado por
+  requisição (`ClasseDoDonoField`) — sem isso, um usuário anexa a **classe de outro**
+  ao próprio evento e o DRF responde 201, porque para ele o id existe.
+  `FeriadoLocal` ficou **por-dono** (decisão Q5); catálogo global com município fica
+  para quando houver seleção de município.
+- **0B.6 Seed das 5 classes padrão** — ✅ feito no PR1: saiu da migration `0002` para
+  `services/perfis.seed_classes_padrao()`, por perfil. O PR2 o chama no provisionamento JIT.
 - **0B.9 Views finas + agente em processo** (**PR0**). Hoje `services/agente.py:47` é
   **código Django fazendo HTTP para o próprio Django**: monta a URL a partir de
   `API_BASE_URL` e sai pela rede para chegar onde já estava — atravessando auth,
@@ -152,7 +156,9 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   ("DRF fino: as views delegam para `planner/services/`"). O PR0 não inventa regra
   nova; faz o código cumprir a que já está escrita.
 
-- **0B.10 Inverter o default: acesso global vira explícito** (**PR1**, decisão central).
+- **0B.10 Inverter o default: acesso global vira explícito** (**PR1**, decisão central) — ✅ feito.
+  Deu retorno imediato: ligado o manager, a suíte apontou sozinha **86 falhas**, cada uma
+  num ponto que precisava de escopo — inclusive os que a análise não tinha achado.
   O manager default dos 8 models-raiz **exige escopo** — `Evento.objects.all()`
   levanta. Quem precisa do global escreve `Evento.objects.sem_escopo()`, que é
   **grepável e aparece na revisão** (usam isso os seeds e o admin; mais ninguém).
@@ -281,9 +287,11 @@ O grosso da fundação já foi no beta (Fase 0B). Aqui fica o que é específico
   sem credencial. O MCP segue HTTP e ganha credencial de serviço própria.
 - ✅ **Threading do `dono` nos services** (0B.10): decidido — **parâmetro obrigatório**,
   não `contextvar` (o contexto implícito falha em silêncio no worker Celery).
+- ✅ **Identidade do `Perfil`, destino dos dados de dev, `FeriadoLocal` e escopo do
+  admin** (Q3–Q6): decididos em 24/07/2026, no PR1 — PK local + `supabase_id` à parte;
+  o perfil local **vira** a conta do usuário no 1º login; `FeriadoLocal` por-dono;
+  admin global com `list_filter` por dono. Detalhe em `docs/tasks/contexto-0b-pr1.md`.
 - **Unificar `AGENTE_PROVIDER` e `LLM_PROVIDER`** num só env (0A.1) ou manter separados.
-- **Identidade do `Perfil` antes do Supabase, destino dos dados de dev, `FeriadoLocal`
-  por-dono vs catálogo, escopo do admin** — Q3–Q6 de `docs/tasks/fase0b-pr1-dono.md`.
 - **IA local vs API** — aguarda dado da Fase 0.
 - **Regras de negócio a mudar** — aguarda dogfooding (Fase 1).
 - **Hospedar (Fork A) vs desktop nativo (Fork B)** pros leigos — decidir após o beta.

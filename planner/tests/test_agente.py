@@ -23,10 +23,11 @@ from planner.services import agente
 from planner.tests.factories import EventoFactory, aware
 
 
-def classe(nome):
-    """As 5 classes padrão já vêm da migration 0002 — criar por factory com um
-    desses nomes viola `Classe.nome unique`. Reusa a semeada."""
-    return Classe.objects.get(nome=nome)
+def classe(perfil, nome):
+    """As 5 classes padrão já vêm da migration 0002 (adotadas pelo perfil local
+    na 0008) — criar por factory com um desses nomes viola a unicidade
+    (dono, nome). Reusa a semeada."""
+    return Classe.objects.do_dono(perfil).get(nome=nome)
 
 
 @pytest.fixture(autouse=True)
@@ -89,7 +90,7 @@ def _tc(nome, **args):
 # Loop de tool-use                                                             #
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db
-def test_conversar_executa_ferramenta_e_responde(monkeypatch):
+def test_conversar_executa_ferramenta_e_responde(monkeypatch, perfil):
     _instalar_provider(
         monkeypatch,
         [
@@ -98,7 +99,7 @@ def test_conversar_executa_ferramenta_e_responde(monkeypatch):
         ],
     )
 
-    out = agente.conversar("quais classes?", {"hoje": "2026-07-04"})
+    out = agente.conversar(perfil, "quais classes?", {"hoje": "2026-07-04"})
 
     assert out["resposta"] == "Você tem a classe Prova."
     assert out["ia_indisponivel"] is False
@@ -109,7 +110,9 @@ def test_conversar_executa_ferramenta_e_responde(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_conversar_criar_tarefa_cria_de_verdade_e_marca_mudou_estado(monkeypatch):
+def test_conversar_criar_tarefa_cria_de_verdade_e_marca_mudou_estado(
+    monkeypatch, perfil
+):
     _instalar_provider(
         monkeypatch,
         [
@@ -123,17 +126,17 @@ def test_conversar_criar_tarefa_cria_de_verdade_e_marca_mudou_estado(monkeypatch
         ],
     )
 
-    out = agente.conversar("adiciona Física 2", {"hoje": "2026-07-04"})
+    out = agente.conversar(perfil, "adiciona Física 2", {"hoje": "2026-07-04"})
 
     assert out["mudou_estado"] is True
     assert out["acoes"][0]["muda_estado"] is True
     # O ganho de chamar o service em processo: dá para afirmar que a escrita
     # aconteceu, não só que a ferramenta devolveu um dict bonito.
-    assert Tarefa.objects.filter(titulo="Física 2").exists()
+    assert Tarefa.objects.do_dono(perfil).filter(titulo="Física 2").exists()
 
 
 @pytest.mark.django_db
-def test_conversar_replanejar_so_muda_estado_ao_aplicar(monkeypatch):
+def test_conversar_replanejar_so_muda_estado_ao_aplicar(monkeypatch, perfil):
     _instalar_provider(
         monkeypatch,
         [
@@ -143,7 +146,7 @@ def test_conversar_replanejar_so_muda_estado_ao_aplicar(monkeypatch):
             agente._Turno(texto="Simulei.", tool_calls=[]),
         ],
     )
-    simulou = agente.conversar("como fica sem sábado?", {})
+    simulou = agente.conversar(perfil, "como fica sem sábado?", {})
     assert simulou["mudou_estado"] is False  # aplicar ausente → só simulação
 
     _instalar_provider(
@@ -158,12 +161,12 @@ def test_conversar_replanejar_so_muda_estado_ao_aplicar(monkeypatch):
             agente._Turno(texto="Livrei seu sábado.", tool_calls=[]),
         ],
     )
-    aplicou = agente.conversar("livra meu sábado", {})
+    aplicou = agente.conversar(perfil, "livra meu sábado", {})
     assert aplicou["mudou_estado"] is True
 
 
 @pytest.mark.django_db
-def test_conversar_ferramenta_desconhecida_nao_estoura(monkeypatch):
+def test_conversar_ferramenta_desconhecida_nao_estoura(monkeypatch, perfil):
     _instalar_provider(
         monkeypatch,
         [
@@ -171,13 +174,13 @@ def test_conversar_ferramenta_desconhecida_nao_estoura(monkeypatch):
             agente._Turno(texto="Não consegui.", tool_calls=[]),
         ],
     )
-    out = agente.conversar("faz algo", {})
+    out = agente.conversar(perfil, "faz algo", {})
     assert out["resposta"] == "Não consegui."
     assert out["acoes"] == []  # nome desconhecido não vira ação registrada
 
 
 @pytest.mark.django_db
-def test_conversar_erro_de_ferramenta_marca_ok_false(monkeypatch):
+def test_conversar_erro_de_ferramenta_marca_ok_false(monkeypatch, perfil):
     _instalar_provider(
         monkeypatch,
         [
@@ -188,41 +191,41 @@ def test_conversar_erro_de_ferramenta_marca_ok_false(monkeypatch):
             agente._Turno(texto="Faltou a classe.", tool_calls=[]),
         ],
     )
-    out = agente.conversar("cria X", {})
+    out = agente.conversar(perfil, "cria X", {})
     assert out["acoes"][0]["ok"] is False
     assert out["mudou_estado"] is False  # erro não recarrega o calendário
-    assert not Tarefa.objects.exists()  # nada foi gravado
+    assert not Tarefa.objects.do_dono(perfil).exists()  # nada foi gravado
 
 
 # --------------------------------------------------------------------------- #
 # Ferramentas, isoladas                                                        #
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db
-def test_criar_tarefa_com_classe_invalida_devolve_erro_acionavel():
+def test_criar_tarefa_com_classe_invalida_devolve_erro_acionavel(perfil):
     """E2E com o 7B: o modelo chuta classe_id e desiste do erro cru. O erro
     precisa voltar com as classes reais + dica para o modelo se corrigir."""
-    estudar = classe("Estudar")
+    estudar = classe(perfil, "Estudar")
 
-    out = agente._criar_tarefa("X", classe_id="1")
+    out = agente._criar_tarefa(perfil, "X", classe_id="1")
 
     assert out["erro"] == 400
     assert {"id": str(estudar.id), "nome": "Estudar"} in out["classes_disponiveis"]
     assert "criar_tarefa" in out["dica"]
-    assert not Tarefa.objects.exists()
+    assert not Tarefa.objects.do_dono(perfil).exists()
 
 
 @pytest.mark.django_db
-def test_criar_tarefa_erro_sem_classe_id_nao_devolve_classes():
+def test_criar_tarefa_erro_sem_classe_id_nao_devolve_classes(perfil):
     """Erro que não é de classe (ex.: deadline inválida) passa reto, sem o
     payload extra de classes."""
-    out = agente._criar_tarefa("X", deadline="ontem")
+    out = agente._criar_tarefa(perfil, "X", deadline="ontem")
     assert out["erro"] == 400
     assert "classes_disponiveis" not in out
     assert "deadline" in out["detalhe"]
 
 
 @pytest.mark.django_db
-def test_criar_tarefa_normaliza_deadline_utc_e_naive():
+def test_criar_tarefa_normaliza_deadline_utc_e_naive(perfil):
     """ "17h" dito pelo usuário é hora LOCAL; o 7B escreve 17:00Z (=14h local).
     Naive e UTC-zero viram hora de parede local; offset real é respeitado."""
     esperado = "2026-07-08T17:00:00-03:00"
@@ -232,17 +235,17 @@ def test_criar_tarefa_normaliza_deadline_utc_e_naive():
         "2026-07-08T17:00",
         "2026-07-08T17:00:00-03:00",
     ):
-        out = agente._criar_tarefa("X", deadline=entrada)
+        out = agente._criar_tarefa(perfil, "X", deadline=entrada)
         assert "erro" not in out, out
         assert out["deadline"] == esperado, entrada
         # O banco guarda em UTC; o que importa é o instante, não a grafia.
-        gravado = Tarefa.objects.get(pk=out["id"]).deadline
+        gravado = Tarefa.objects.do_dono(perfil).get(pk=out["id"]).deadline
         assert timezone.localtime(gravado).isoformat() == esperado
 
 
 @pytest.mark.django_db
-def test_listar_classes_ordenado_e_com_id_string():
-    saida = agente._listar_classes()
+def test_listar_classes_ordenado_e_com_id_string(perfil):
+    saida = agente._listar_classes(perfil)
     # As 5 padrão da migration 0002, em ordem alfabética.
     assert [c["nome"] for c in saida] == sorted(c["nome"] for c in saida)
     assert {"Aula", "Estudar", "Prova"} <= {c["nome"] for c in saida}
@@ -251,11 +254,11 @@ def test_listar_classes_ordenado_e_com_id_string():
 
 
 @pytest.mark.django_db
-def test_consultar_agenda_digere_por_dia_em_horario_local():
+def test_consultar_agenda_digere_por_dia_em_horario_local(perfil):
     """A API fala UTC e o payload cru fazia o 7B alucinar o resumo. A
     ferramenta entrega dias prontos, horário local hh:mm — o modelo copia."""
-    basicas = classe("Tarefas básicas")
-    aula = classe("Aula")
+    basicas = classe(perfil, "Tarefas básicas")
+    aula = classe(perfil, "Aula")
     # 19:00 local = 22:00Z
     EventoFactory(
         titulo="Academia",
@@ -278,7 +281,7 @@ def test_consultar_agenda_digere_por_dia_em_horario_local():
     )
 
     out = agente._consultar_agenda(
-        "2026-07-06T00:00:00-03:00", "2026-07-12T00:00:00-03:00"
+        perfil, "2026-07-06T00:00:00-03:00", "2026-07-12T00:00:00-03:00"
     )
 
     assert [d["data"] for d in out] == ["2026-07-06", "2026-07-11"]
@@ -290,7 +293,7 @@ def test_consultar_agenda_digere_por_dia_em_horario_local():
 
 
 @pytest.mark.django_db
-def test_consultar_agenda_normaliza_janela_naive_e_data_pura():
+def test_consultar_agenda_normaliza_janela_naive_e_data_pura(perfil):
     """O 7B manda '2026-07-06' ou datetime sem offset; a janela exige tz-aware.
     A ferramenta normaliza (data pura como fim vira 23:59) — era 400 no E2E."""
     EventoFactory(
@@ -300,28 +303,30 @@ def test_consultar_agenda_normaliza_janela_naive_e_data_pura():
     )
 
     # Data pura nas duas pontas: o fim vira 23:59 e o evento do dia entra.
-    out = agente._consultar_agenda("2026-07-06", "2026-07-06")
+    out = agente._consultar_agenda(perfil, "2026-07-06", "2026-07-06")
     assert [d["data"] for d in out] == ["2026-07-06"]
 
     # Naive vira aware; offset explícito é preservado.
-    out = agente._consultar_agenda("2026-07-06T07:00", "2026-07-06T12:00:00-03:00")
+    out = agente._consultar_agenda(
+        perfil, "2026-07-06T07:00", "2026-07-06T12:00:00-03:00"
+    )
     assert [e["titulo"] for e in out[0]["eventos"]] == ["Só neste dia"]
 
     # Não-ISO vira erro acionável, em vez de 400 vindo da API.
-    erro = agente._consultar_agenda("semana que vem", "???")
+    erro = agente._consultar_agenda(perfil, "semana que vem", "???")
     assert erro["erro"] == 400
 
 
 @pytest.mark.django_db
-def test_consultar_agenda_recusa_janela_maior_que_o_teto():
-    erro = agente._consultar_agenda("2026-01-01", "2026-12-31")
+def test_consultar_agenda_recusa_janela_maior_que_o_teto(perfil):
+    erro = agente._consultar_agenda(perfil, "2026-01-01", "2026-12-31")
     assert erro["erro"] == 400
     assert "92 dias" in erro["detalhe"]
 
 
 @pytest.mark.django_db
-def test_listar_pendentes_digere():
-    estudar = classe("Estudar")
+def test_listar_pendentes_digere(perfil):
+    estudar = classe(perfil, "Estudar")
     agora = timezone.now()
     EventoFactory(
         titulo="Revisar Cálculo",
@@ -332,7 +337,7 @@ def test_listar_pendentes_digere():
         status=Evento.Status.AGENDADO,
     )
 
-    out = agente._listar_pendentes()
+    out = agente._listar_pendentes(perfil)
 
     assert len(out) == 1
     assert out[0]["titulo"] == "Revisar Cálculo"
@@ -346,11 +351,11 @@ def test_listar_pendentes_digere():
 # Grounding dos FATOS                                                          #
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db
-def test_conversar_injeta_classes_nos_fatos(monkeypatch):
+def test_conversar_injeta_classes_nos_fatos(monkeypatch, perfil):
     """Grounding: as classes reais entram nos FATOS do pedido — o 7B copia o
     id em vez de precisar do salto listar_classes → criar_tarefa (que ele
     não faz: chuta ids, vimos no E2E)."""
-    estudar = classe("Estudar")
+    estudar = classe(perfil, "Estudar")
     pedidos = []
 
     def fake_criar_provider(historico, pedido):
@@ -358,13 +363,13 @@ def test_conversar_injeta_classes_nos_fatos(monkeypatch):
         return FakeProvider([agente._Turno(texto="ok", tool_calls=[])])
 
     monkeypatch.setattr(agente, "_criar_provider", fake_criar_provider)
-    agente.conversar("oi", {"hoje": "2026-07-04"})
+    agente.conversar(perfil, "oi", {"hoje": "2026-07-04"})
     assert str(estudar.id) in pedidos[0]  # classes viraram FATOS
     assert "hoje" in pedidos[0]  # contexto original preservado
 
 
 @pytest.mark.django_db
-def test_conversar_injeta_datas_nos_fatos(monkeypatch):
+def test_conversar_injeta_datas_nos_fatos(monkeypatch, perfil):
     """Data é aritmética: o dicionário `datas` usa as palavras do usuário como
     chave ("próxima segunda-feira") — a resolução vira busca literal (no E2E o
     7B apontava uma sexta para "segunda que vem")."""
@@ -375,7 +380,7 @@ def test_conversar_injeta_datas_nos_fatos(monkeypatch):
         return FakeProvider([agente._Turno(texto="ok", tool_calls=[])])
 
     monkeypatch.setattr(agente, "_criar_provider", fake_criar_provider)
-    agente.conversar("o que tenho sexta?", {})
+    agente.conversar(perfil, "o que tenho sexta?", {})
     fatos = json.loads(pedidos[0].split("\n\nPedido")[0].split(":\n", 1)[1])
 
     hoje = timezone.localdate()
@@ -390,17 +395,17 @@ def test_conversar_injeta_datas_nos_fatos(monkeypatch):
     assert fatos["datas"]["próxima segunda-feira"] == prox_seg.isoformat()
 
 
-def test_conversar_desligado_levanta(settings):
+def test_conversar_desligado_levanta(settings, perfil):
     settings.AGENTE_ENABLED = False
     with pytest.raises(agente.AgenteIndisponivel):
-        agente.conversar("oi", {})
+        agente.conversar(perfil, "oi", {})
 
 
 # --------------------------------------------------------------------------- #
 # Endpoint 202 → polling → pronto                                             #
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db
-def test_endpoint_chat_fluxo_completo(api, eager, monkeypatch):
+def test_endpoint_chat_fluxo_completo(api, eager, monkeypatch, perfil):
     _instalar_provider(
         monkeypatch,
         [
@@ -428,7 +433,7 @@ def test_endpoint_chat_fluxo_completo(api, eager, monkeypatch):
 
 
 @pytest.mark.django_db
-def test_endpoint_degrada_sem_cerebro(api, eager, monkeypatch):
+def test_endpoint_degrada_sem_cerebro(api, eager, monkeypatch, perfil):
     def _cai(hist, msg):
         raise agente.AgenteIndisponivel("provider fora")
 
@@ -446,7 +451,9 @@ def test_endpoint_degrada_sem_cerebro(api, eager, monkeypatch):
 
 
 @pytest.mark.django_db
-def test_endpoint_memoria_da_conversa_reenvia_historico(api, eager, monkeypatch):
+def test_endpoint_memoria_da_conversa_reenvia_historico(
+    api, eager, monkeypatch, perfil
+):
     capturado = {}
 
     def _fake_criar(historico, mensagem):

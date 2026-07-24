@@ -43,6 +43,7 @@ from .services import (
     aplicacao,
     completion,
     holidays,
+    perfis,
     planejamento,
     planejamento_ia,
     replanejamento,
@@ -50,6 +51,33 @@ from .services import (
     tempos,
 )
 from .services.planejamento import HORIZONTES
+
+# Posse dos jobs assíncronos (Fase 0B, PR1). Antes, quem tivesse um `job_id`
+# lia o resultado — o que inclui os títulos das tarefas e a agenda inteira de
+# outra pessoa. A proteção era o id ser um UUID difícil de adivinhar, ou seja,
+# obscuridade e não fronteira (princípio 9 do ROADMAP).
+#
+# O registro é uma entrada de cache à parte, e não um campo no resultado, para
+# não mexer no shape das respostas que o front já consome. TTL folgado: precisa
+# sobreviver ao polling inteiro, senão o dono levaria 404 no próprio job.
+TTL_DONO_JOB = 60 * 60 * 24
+
+
+def _registrar_dono_job(job_id, dono):
+    cache.set(f"job_dono:{job_id}", str(dono.id), timeout=TTL_DONO_JOB)
+
+
+def _job_do_dono(job_id, dono):
+    """Job pertence a quem pergunta? Desconhecido conta como "não" — na dúvida
+    a resposta é 404, igual à de um job que nunca existiu."""
+    return cache.get(f"job_dono:{job_id}") == str(dono.id)
+
+
+def _nao_encontrado():
+    return Response(
+        {"detail": "Job desconhecido, não finalizado ou expirado."},
+        status=http_status.HTTP_404_NOT_FOUND,
+    )
 
 
 @api_view(["GET"])
@@ -59,7 +87,26 @@ def health(request):
     return Response({"status": "ok"})
 
 
-class ClasseViewSet(viewsets.ModelViewSet):
+class EscopoPorDonoMixin:
+    """Escopa o queryset e carimba o `dono` na criação.
+
+    O `dono` nunca vem do corpo da requisição (é `read_only` no serializer):
+    quem decide de quem é o dado é o servidor, a partir de quem fez a chamada.
+    Hoje `perfil_do_request` devolve sempre o perfil local; no PR2 passa a
+    devolver o do JWT, e nada aqui muda.
+    """
+
+    def get_dono(self):
+        return perfis.perfil_do_request(self.request)
+
+    def get_queryset(self):
+        return super().get_queryset().do_dono(self.get_dono())
+
+    def perform_create(self, serializer):
+        serializer.save(dono=self.get_dono())
+
+
+class ClasseViewSet(EscopoPorDonoMixin, viewsets.ModelViewSet):
     queryset = Classe.objects.all()
     serializer_class = ClasseSerializer
 
@@ -77,7 +124,7 @@ class ClasseViewSet(viewsets.ModelViewSet):
             )
 
 
-class TarefaViewSet(viewsets.ModelViewSet):
+class TarefaViewSet(EscopoPorDonoMixin, viewsets.ModelViewSet):
     queryset = Tarefa.objects.select_related("classe").all()
     serializer_class = TarefaSerializer
     filterset_class = TarefaFilter
@@ -86,7 +133,12 @@ class TarefaViewSet(viewsets.ModelViewSet):
     def promover(self, request, pk=None):
         """Arrasto Inbox → calendário (Handoff §8.2)."""
         tarefa = self.get_object()
-        entrada = PromoverSerializer(data=request.data)
+        # `context` é obrigatório: o `classe_id` é escopado pelo perfil da
+        # requisição (ver ClasseDoDonoField), e sem o request o campo não tem
+        # como saber de quem são as classes.
+        entrada = PromoverSerializer(
+            data=request.data, context=self.get_serializer_context()
+        )
         entrada.is_valid(raise_exception=True)
         dados = entrada.validated_data
 
@@ -115,7 +167,9 @@ class TarefaViewSet(viewsets.ModelViewSet):
         das sessões é o tempo de produção; cada uma acompanha conclusão.
         """
         tarefa = self.get_object()
-        entrada = PlanejarSerializer(data=request.data)
+        entrada = PlanejarSerializer(
+            data=request.data, context=self.get_serializer_context()
+        )
         entrada.is_valid(raise_exception=True)
         dados = entrada.validated_data
 
@@ -134,7 +188,7 @@ class TarefaViewSet(viewsets.ModelViewSet):
         )
 
 
-class EventoViewSet(viewsets.ModelViewSet):
+class EventoViewSet(EscopoPorDonoMixin, viewsets.ModelViewSet):
     queryset = Evento.objects.select_related(
         "classe", "regra_recorrencia", "origem_tarefa"
     ).all()
@@ -148,7 +202,7 @@ class EventoViewSet(viewsets.ModelViewSet):
         inicio = self._parse_janela(request.query_params.get("inicio"), "inicio")
         fim = self._parse_janela(request.query_params.get("fim"), "fim")
         try:
-            itens = agenda.eventos_na_janela(inicio, fim)
+            itens = agenda.eventos_na_janela(self.get_dono(), inicio, fim)
         except agenda.JanelaInvalida as e:
             # `fim` inválido é erro de campo; o teto da janela é erro geral.
             campo = "fim" if "maior que inicio" in str(e) else "detail"
@@ -271,7 +325,7 @@ def pendentes(request):
     agora > fim). Cobre eventos não recorrentes; ocorrências recorrentes
     pendentes dependem de janela (ver GET /eventos).
     """
-    qs = agenda.pendentes(timezone.now())
+    qs = agenda.pendentes(perfis.perfil_do_request(request), timezone.now())
     return Response(EventoSerializer(qs, many=True).data)
 
 
@@ -286,7 +340,9 @@ def feriados(request):
         ano = int(ano)
     except ValueError:
         raise ValidationError({"ano": "Deve ser um inteiro."})
-    datas = sorted(holidays.feriados_do_ano(ano))
+    # Nacional e estadual são fatos globais (cache compartilhado); só a camada
+    # municipal, do DB, é do perfil.
+    datas = sorted(holidays.feriados_do_ano(ano, perfis.perfil_do_request(request)))
     return Response({"ano": ano, "feriados": [d.isoformat() for d in datas]})
 
 
@@ -303,7 +359,8 @@ def planejamento_calcular(request):
     entrada.is_valid(raise_exception=True)
     dados = entrada.validated_data
 
-    validas, invalidas = planejamento.validar_tarefas(dados["tarefa_ids"])
+    dono = perfis.perfil_do_request(request)
+    validas, invalidas = planejamento.validar_tarefas(dono, dados["tarefa_ids"])
     if invalidas:
         return Response(
             {"tarefas_invalidas": invalidas},
@@ -311,7 +368,7 @@ def planejamento_calcular(request):
         )
 
     agora = dados.get("a_partir_de") or timezone.now()
-    res = planejamento.montar_plano(validas, agora, dados.get("preferencias", {}))
+    res = planejamento.montar_plano(dono, validas, agora, dados.get("preferencias", {}))
     return Response(planejamento.serializar_plano(res))
 
 
@@ -328,7 +385,8 @@ def planejamento_planejar_ia(request):
     entrada.is_valid(raise_exception=True)
     dados = entrada.validated_data
 
-    validas, invalidas = planejamento.validar_tarefas(dados["tarefa_ids"])
+    dono = perfis.perfil_do_request(request)
+    validas, invalidas = planejamento.validar_tarefas(dono, dados["tarefa_ids"])
     if invalidas:
         return Response(
             {"tarefas_invalidas": invalidas},
@@ -339,21 +397,22 @@ def planejamento_planejar_ia(request):
     prefs_entrada = dados.get("preferencias", {})
     horizonte_dias = HORIZONTES[dados["horizonte"]]
     base = planejamento.montar_plano(
-        validas, agora, prefs_entrada, horizonte_dias=horizonte_dias
+        dono, validas, agora, prefs_entrada, horizonte_dias=horizonte_dias
     )
     plano_base = planejamento.serializar_plano(base)
 
     ids = [str(t.id) for t in validas]
     chave = tasks._chave_cache(
-        ids, plano_base["preferencias_usadas"], plano_base["sessoes"]
+        dono.id, ids, plano_base["preferencias_usadas"], plano_base["sessoes"]
     )
     hit = cache.get(chave)
     if hit is not None:
         return Response({"status": "pronto", "resultado": hit})
 
     job = tasks.planejar_ia_task.delay(
-        ids, agora.isoformat(), prefs_entrada, horizonte_dias
+        str(dono.id), ids, agora.isoformat(), prefs_entrada, horizonte_dias
     )
+    _registrar_dono_job(job.id, dono)
     return Response(
         {
             "job_id": job.id,
@@ -383,8 +442,9 @@ def planejamento_estimativa(request):
             status=http_status.HTTP_400_BAD_REQUEST,
         )
 
+    dono = perfis.perfil_do_request(request)
     ids = request.query_params.getlist("tarefa_ids")
-    validas, _ = planejamento.validar_tarefas(ids)
+    validas, _ = planejamento.validar_tarefas(dono, ids)
     if not validas:
         return Response(
             {
@@ -397,7 +457,7 @@ def planejamento_estimativa(request):
 
     agora = timezone.now()
     base = planejamento.montar_plano(
-        validas, agora, {}, horizonte_dias=HORIZONTES[horizonte]
+        dono, validas, agora, {}, horizonte_dias=HORIZONTES[horizonte]
     )
     return Response(
         {
@@ -413,6 +473,8 @@ def planejamento_estimativa(request):
 @permission_classes([AllowAny])
 def planejamento_planejar_ia_status(request, job_id):
     """GET /planejamento/planejar-ia/{job_id} → estado do job (AsyncResult)."""
+    if not _job_do_dono(job_id, perfis.perfil_do_request(request)):
+        return _nao_encontrado()
     resultado = AsyncResult(str(job_id))
     if resultado.successful():
         return Response({"status": "pronto", "resultado": resultado.result})
@@ -433,7 +495,9 @@ def planejamento_aplicar(request):
     entrada.is_valid(raise_exception=True)
 
     try:
-        criados = aplicacao.aplicar_sessoes(entrada.validated_data["sessoes"])
+        criados = aplicacao.aplicar_sessoes(
+            perfis.perfil_do_request(request), entrada.validated_data["sessoes"]
+        )
     except aplicacao.AplicacaoInvalida as e:
         return Response(e.erros, status=http_status.HTTP_400_BAD_REQUEST)
 
@@ -458,7 +522,8 @@ def planejamento_cenarios(request):
     entrada.is_valid(raise_exception=True)
     dados = entrada.validated_data
 
-    validas, invalidas = planejamento.validar_tarefas(dados["tarefa_ids"])
+    dono = perfis.perfil_do_request(request)
+    validas, invalidas = planejamento.validar_tarefas(dono, dados["tarefa_ids"])
     if invalidas:
         return Response(
             {"tarefas_invalidas": invalidas},
@@ -469,13 +534,17 @@ def planejamento_cenarios(request):
     prefs_entrada = dados.get("preferencias", {})
     horizonte_dias = HORIZONTES[dados["horizonte"]]
     base = planejamento.montar_plano(
-        validas, agora, prefs_entrada, horizonte_dias=horizonte_dias
+        dono, validas, agora, prefs_entrada, horizonte_dias=horizonte_dias
     )
     plano_base = planejamento.serializar_plano(base)
 
     ids = [str(t.id) for t in validas]
     chave = tasks._chave_cache(
-        ids, plano_base["preferencias_usadas"], plano_base["sessoes"], "cenarios"
+        dono.id,
+        ids,
+        plano_base["preferencias_usadas"],
+        plano_base["sessoes"],
+        "cenarios",
     )
     hit = cache.get(chave)
     if hit is not None:
@@ -483,11 +552,13 @@ def planejamento_cenarios(request):
         # seria endereçável pelo escolher nem pelo refinar (C5).
         job_id = str(uuid4())
         cache.set(f"cenarios_job:{job_id}", hit, timeout=3600)
+        _registrar_dono_job(job_id, dono)
         return Response({"status": "pronto", "job_id": job_id, "resultado": hit})
 
     job = tasks.gerar_cenarios_task.delay(
-        ids, agora.isoformat(), prefs_entrada, horizonte_dias
+        str(dono.id), ids, agora.isoformat(), prefs_entrada, horizonte_dias
     )
+    _registrar_dono_job(job.id, dono)
     return Response(
         {
             "job_id": job.id,
@@ -508,6 +579,8 @@ def planejamento_cenarios(request):
 @permission_classes([AllowAny])
 def planejamento_cenarios_status(request, job_id):
     """GET /planejamento/cenarios/{job_id} → estado do job (AsyncResult)."""
+    if not _job_do_dono(job_id, perfis.perfil_do_request(request)):
+        return _nao_encontrado()
     hit = cache.get(f"cenarios_job:{job_id}")
     if hit is not None:
         return Response({"status": "pronto", "resultado": hit})
@@ -532,6 +605,13 @@ def planejamento_cenarios_escolher(request):
     entrada.is_valid(raise_exception=True)
     dados = entrada.validated_data
 
+    dono = perfis.perfil_do_request(request)
+    if not _job_do_dono(dados["job_id"], dono):
+        return Response(
+            {"job_id": ["Job desconhecido, não finalizado ou expirado."]},
+            status=http_status.HTTP_404_NOT_FOUND,
+        )
+
     resultado = cache.get(f"cenarios_job:{dados['job_id']}")
     if resultado is None:
         job = AsyncResult(str(dados["job_id"]))
@@ -555,6 +635,7 @@ def planejamento_cenarios_escolher(request):
         # Tudo-ou-nada: se o aplicar falhar, nem a escolha nem os pesos ficam.
         with transaction.atomic():
             escolha = EscolhaCenario.objects.create(
+                dono=dono,
                 lote=[
                     {
                         "id": c["id"],
@@ -574,7 +655,7 @@ def planejamento_cenarios_escolher(request):
 
             corpo = {"aplicado": False, "pesos": pesos}
             if dados["aplicar"]:
-                criados = aplicacao.aplicar_sessoes(cenario["plano"]["sessoes"])
+                criados = aplicacao.aplicar_sessoes(dono, cenario["plano"]["sessoes"])
                 corpo = {
                     "aplicado": True,
                     "eventos_criados": len(criados),
@@ -599,6 +680,13 @@ def planejamento_cenarios_refinar(request):
     entrada = RefinarCenarioSerializer(data=request.data)
     entrada.is_valid(raise_exception=True)
     dados = entrada.validated_data
+
+    dono = perfis.perfil_do_request(request)
+    if not _job_do_dono(dados["job_id"], dono):
+        return Response(
+            {"job_id": ["Job desconhecido, não finalizado ou expirado."]},
+            status=http_status.HTTP_404_NOT_FOUND,
+        )
 
     resultado = cache.get(f"cenarios_job:{dados['job_id']}")
     if resultado is None:
@@ -628,8 +716,9 @@ def planejamento_cenarios_refinar(request):
         )
 
     job = tasks.refinar_cenario_task.delay(
-        dados["job_id"], cenario_id, dados["mensagem"]
+        str(dono.id), dados["job_id"], cenario_id, dados["mensagem"]
     )
+    _registrar_dono_job(job.id, dono)
     # 1 chamada de IA + solver: mesma ordem de grandeza do gerar; o nº de
     # tarefas sai do plano base do lote (nada de re-rodar o solver aqui).
     base = next(c for c in resultado["cenarios"] if c["id"] == "base")
@@ -652,6 +741,8 @@ def planejamento_cenarios_refinar(request):
 @permission_classes([AllowAny])
 def planejamento_cenarios_refinar_status(request, job_id):
     """GET /planejamento/cenarios/refinar/{job_id} → estado do refino."""
+    if not _job_do_dono(job_id, perfis.perfil_do_request(request)):
+        return _nao_encontrado()
     hit = cache.get(f"cenarios_refino:{job_id}")
     if hit is not None:
         return Response({"status": "pronto", "resultado": hit})
@@ -678,9 +769,14 @@ def planejamento_agente_chat(request):
     entrada = AgenteChatSerializer(data=request.data)
     entrada.is_valid(raise_exception=True)
     dados = entrada.validated_data
+    dono = perfis.perfil_do_request(request)
     job = tasks.agente_chat_task.delay(
-        dados["conversa_id"], dados["mensagem"], dados.get("contexto") or {}
+        str(dono.id),
+        dados["conversa_id"],
+        dados["mensagem"],
+        dados.get("contexto") or {},
     )
+    _registrar_dono_job(job.id, dono)
     return Response(
         {
             "job_id": job.id,
@@ -695,6 +791,8 @@ def planejamento_agente_chat(request):
 @permission_classes([AllowAny])
 def planejamento_agente_chat_status(request, job_id):
     """GET /planejamento/agente/chat/{job_id} → estado do turno."""
+    if not _job_do_dono(job_id, perfis.perfil_do_request(request)):
+        return _nao_encontrado()
     hit = cache.get(f"agente_chat:{job_id}")
     if hit is not None:
         return Response({"status": "pronto", "resultado": hit})
@@ -722,6 +820,7 @@ def planejamento_replanejar(request):
     dados = entrada.validated_data
 
     rp = replanejamento.replanejar(
+        perfis.perfil_do_request(request),
         agora=dados.get("a_partir_de") or timezone.now(),
         dias_bloqueados=dados.get("dias_bloqueados"),
         preferencias=dados.get("preferencias", {}),
@@ -750,6 +849,7 @@ def planejamento_replanejar_aplicar(request):
 
     try:
         rp, criados, removidos = replanejamento.aplicar_replanejamento(
+            perfis.perfil_do_request(request),
             agora=dados.get("a_partir_de") or timezone.now(),
             dias_bloqueados=dados.get("dias_bloqueados"),
             preferencias=dados.get("preferencias", {}),

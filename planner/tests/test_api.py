@@ -123,7 +123,9 @@ def test_planejar_cria_uma_sessao_por_evento(api):
 
     tarefa.refresh_from_db()
     assert tarefa.status == Tarefa.Status.PROMOVIDA
-    assert tarefa.eventos.count() == 3
+    # Pelo manager escopado, e não por `tarefa.eventos`: o related manager
+    # herda o mesmo default que exige escopo (ver planner/managers.py).
+    assert Evento.objects.do_dono(tarefa.dono).filter(origem_tarefa=tarefa).count() == 3
 
 
 def test_planejar_sem_sessoes_retorna_400(api):

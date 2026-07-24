@@ -29,8 +29,8 @@ class ClasseDesconhecida(ValueError):
     modelo corrigir a chamada no turno seguinte."""
 
 
-def criar(titulo, classe_id=None, deadline=None, esforco_min=None, descricao=""):
-    """Cria uma Tarefa no Inbox a partir de dados já normalizados.
+def criar(dono, titulo, classe_id=None, deadline=None, esforco_min=None, descricao=""):
+    """Cria uma Tarefa no Inbox de um perfil, a partir de dados já normalizados.
 
     Existe para o agente ter o mesmo caminho de escrita da API **sem HTTP**. A
     validação de forma (tipos, obrigatórios) continua no serializer, no caminho
@@ -42,7 +42,8 @@ def criar(titulo, classe_id=None, deadline=None, esforco_min=None, descricao="")
     classe = None
     if classe_id is not None:
         try:
-            classe = Classe.objects.get(pk=classe_id)
+            # Escopado: sem isto, o agente anexaria a classe de outro perfil.
+            classe = Classe.objects.do_dono(dono).get(pk=classe_id)
         except Classe.DoesNotExist:
             raise ClasseDesconhecida(f"Classe {classe_id} não existe.")
         except DjangoValidationError:
@@ -54,6 +55,7 @@ def criar(titulo, classe_id=None, deadline=None, esforco_min=None, descricao="")
         raise ValueError("esforco_estimado deve ser um inteiro ≥ 1.")
 
     return Tarefa.objects.create(
+        dono=dono,
         titulo=titulo.strip(),
         descricao=descricao or "",
         classe=classe,
@@ -71,6 +73,11 @@ def resolver_classe(tarefa, classe=None):
     escolhida = classe or tarefa.classe
     if escolhida is None:
         raise ValueError("Tarefa sem classe; informe classe_id.")
+    if escolhida.dono_id != tarefa.dono_id:
+        # Cinto de segurança: no caminho HTTP o serializer já escopa o
+        # `classe_id`. Aqui a checagem vale para quem chama o service direto —
+        # o agente, os seeds, o próximo service que ainda não existe.
+        raise ClasseDesconhecida(f"Classe {escolhida.id} não existe.")
     return escolhida
 
 
@@ -88,6 +95,9 @@ def promover(tarefa, inicio, fim=None, classe=None):
             fim = inicio + DURACAO_PADRAO
 
     evento = Evento.objects.create(
+        # O dono vem da tarefa, nunca de quem chamou: um evento não tem como
+        # nascer num perfil diferente do da sua origem.
+        dono=tarefa.dono,
         titulo=tarefa.titulo,
         descricao=tarefa.descricao,
         inicio=inicio,
@@ -113,6 +123,7 @@ def planejar(tarefa, sessoes, classe=None):
     classe = resolver_classe(tarefa, classe)
     eventos = [
         Evento.objects.create(
+            dono=tarefa.dono,
             titulo=tarefa.titulo,
             descricao=tarefa.descricao,
             inicio=s["inicio"],

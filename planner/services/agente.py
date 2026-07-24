@@ -70,15 +70,21 @@ def _erro(codigo, detalhe):
     return {"erro": codigo, "detalhe": detalhe}
 
 
-def _listar_classes():
+# Toda ferramenta recebe `dono` como PRIMEIRO PARÂMETRO POSICIONAL, e o dispatch
+# o passa por fora do `**tc.args` (Fase 0B, PR1). É estrutural, não convenção: os
+# argumentos que o modelo escolhe e a identidade de quem está conversando chegam
+# por caminhos diferentes, então nenhuma saída do LLM — alucinada ou induzida por
+# texto na conversa — consegue trocar o dono dos dados.
+def _listar_classes(dono):
     """Classes de atividade (id, nome). Use o id em criar_tarefa."""
     return [
-        {"id": str(c.id), "nome": c.nome} for c in Classe.objects.all().order_by("nome")
+        {"id": str(c.id), "nome": c.nome}
+        for c in Classe.objects.do_dono(dono).order_by("nome")
     ]
 
 
 def _criar_tarefa(
-    titulo, classe_id=None, deadline=None, esforco_min=None, descricao=""
+    dono, titulo, classe_id=None, deadline=None, esforco_min=None, descricao=""
 ):
     prazo = None
     if deadline is not None:
@@ -94,6 +100,7 @@ def _criar_tarefa(
             )
     try:
         tarefa = tarefas.criar(
+            dono,
             titulo=titulo,
             classe_id=classe_id,
             deadline=prazo,
@@ -107,7 +114,7 @@ def _criar_tarefa(
         # técnico".
         return {
             **_erro(400, {"classe_id": [str(e)]}),
-            "classes_disponiveis": _listar_classes(),
+            "classes_disponiveis": _listar_classes(dono),
             "dica": (
                 "classe_id deve ser um id (UUID) de classes_disponiveis; "
                 "repita criar_tarefa com o id correto."
@@ -124,7 +131,7 @@ def _criar_tarefa(
     }
 
 
-def _listar_pendentes():
+def _listar_pendentes(dono):
     """Pendentes pré-digeridos (mesma razão da agenda: o modelo copia)."""
     return [
         {
@@ -133,7 +140,7 @@ def _listar_pendentes():
             "venceu_em": timezone.localtime(ev.fim).strftime("%Y-%m-%d %H:%M"),
             "classe": ev.classe.nome if ev.classe else None,
         }
-        for ev in agenda.pendentes(timezone.now())
+        for ev in agenda.pendentes(dono, timezone.now())
     ]
 
 
@@ -172,7 +179,7 @@ def _normalizar_janela(valor, eh_fim=False):
     return dt
 
 
-def _consultar_agenda(inicio, fim):
+def _consultar_agenda(dono, inicio, fim):
     """Agenda PRÉ-DIGERIDA: dias com eventos, horários locais hh:mm, campos
     mínimos. O payload cru da API (UTC, dezenas de campos) fazia o 7B alucinar
     o resumo — chamava a ferramenta certa e narrava outra semana. Entregar o
@@ -184,7 +191,7 @@ def _consultar_agenda(inicio, fim):
         return _erro(400, "inicio/fim devem ser datas ISO (YYYY-MM-DD ou completo).")
 
     try:
-        itens = agenda.eventos_na_janela(ini_dt, fim_dt)
+        itens = agenda.eventos_na_janela(dono, ini_dt, fim_dt)
     except agenda.JanelaInvalida as e:
         return _erro(400, str(e))
 
@@ -214,9 +221,11 @@ def _consultar_agenda(inicio, fim):
     ]
 
 
-def _simular_plano(tarefa_ids, preferencias=None, horizonte=None, a_partir_de=None):
+def _simular_plano(
+    dono, tarefa_ids, preferencias=None, horizonte=None, a_partir_de=None
+):
     """What-if: roda o solver e NÃO persiste (mesmo contrato de /calcular)."""
-    validas, invalidas = planejamento.validar_tarefas(tarefa_ids)
+    validas, invalidas = planejamento.validar_tarefas(dono, tarefa_ids)
     if invalidas:
         return _erro(422, {"tarefas_invalidas": invalidas})
 
@@ -225,6 +234,7 @@ def _simular_plano(tarefa_ids, preferencias=None, horizonte=None, a_partir_de=No
         return _erro(400, "a_partir_de deve ser uma data ISO.")
 
     res = planejamento.montar_plano(
+        dono,
         validas,
         agora,
         preferencias or {},
@@ -233,12 +243,13 @@ def _simular_plano(tarefa_ids, preferencias=None, horizonte=None, a_partir_de=No
     return planejamento.serializar_plano(res)
 
 
-def _replanejar(dias_bloqueados=None, preferencias=None, aplicar=False):
+def _replanejar(dono, dias_bloqueados=None, preferencias=None, aplicar=False):
     """Replaneja do agora em diante. `aplicar=False` só simula (plano + diff)."""
     agora = timezone.now()
     try:
         if aplicar:
             rp, criados, removidos = replanejamento.aplicar_replanejamento(
+                dono,
                 agora=agora,
                 dias_bloqueados=dias_bloqueados,
                 preferencias=preferencias or {},
@@ -251,6 +262,7 @@ def _replanejar(dias_bloqueados=None, preferencias=None, aplicar=False):
                 "metricas_vs_anterior": rp.metricas_vs_anterior,
             }
         rp = replanejamento.replanejar(
+            dono,
             agora=agora,
             dias_bloqueados=dias_bloqueados,
             preferencias=preferencias or {},
@@ -539,14 +551,17 @@ def _criar_provider(historico, mensagem):
 # --------------------------------------------------------------------------- #
 # 3. Loop de tool-use — provider-agnóstico                                     #
 # --------------------------------------------------------------------------- #
-def conversar(mensagem, contexto, historico=None):
-    """Um turno de conversa. Roda o loop de tool-use e devolve
-    `{resposta, acoes, mudou_estado, ia_indisponivel}`.
+def conversar(dono, mensagem, contexto, historico=None):
+    """Um turno de conversa, no escopo de um perfil. Roda o loop de tool-use e
+    devolve `{resposta, acoes, mudou_estado, ia_indisponivel}`.
 
     `contexto` (data de hoje, seleção atual, etc.) entra como FATOS no início do
     pedido — o agente resolve "sexta"/"meu sábado" a partir daí, não inventa.
     `historico` é a conversa anterior (lista {role, content}, só texto).
     Levanta `AgenteIndisponivel` se o cérebro estiver fora/desligado.
+
+    O `dono` **não** entra nos FATOS nem no prompt: ele fica fora do alcance do
+    modelo e é aplicado no dispatch das ferramentas.
     """
     if not settings.AGENTE_ENABLED:
         raise AgenteIndisponivel("agente desligado")
@@ -561,7 +576,7 @@ def conversar(mensagem, contexto, historico=None):
         # guarda para "segue sem as classes". Em processo, falha aqui é o banco
         # fora — não há degradação útil: a task inteira cai e o endpoint já
         # responde com `ia_indisponivel`.
-        fatos["classes"] = _listar_classes()
+        fatos["classes"] = _listar_classes(dono)
     # Data é aritmética, não agência: o 7B erra "segunda que vem" contando nos
     # dedos (e ignorava a tabela genérica de dias). O dicionário usa as MESMAS
     # palavras que o usuário diria como chave — a resolução vira busca literal.
@@ -598,7 +613,9 @@ def conversar(mensagem, contexto, historico=None):
                 )
                 continue
             try:
-                saida = ferr["executar"](**tc.args)
+                # `dono` posicional, `tc.args` desempacotado: o que o modelo
+                # escolheu nunca chega perto de decidir de quem são os dados.
+                saida = ferr["executar"](dono, **tc.args)
             except TypeError as e:  # argumentos que não batem com a assinatura
                 saida = {"erro": "argumentos inválidos", "detalhe": str(e)}
             ok = not (isinstance(saida, dict) and "erro" in saida)

@@ -34,33 +34,34 @@ def validar_janela(inicio, fim):
         raise JanelaInvalida("Janela máxima de ~92 dias.")
 
 
-def feriados_da_janela(inicio, fim):
+def feriados_da_janela(inicio, fim, dono):
     """União dos feriados de todos os anos que a janela cruza."""
     feriados = set()
     for ano in range(inicio.year, fim.year + 1):
-        feriados |= holidays.feriados_do_ano(ano)
+        feriados |= holidays.feriados_do_ano(ano, dono)
     return feriados
 
 
-def eventos_na_janela(inicio, fim):
-    """Eventos que cruzam a janela, com os recorrentes já expandidos.
+def eventos_na_janela(dono, inicio, fim):
+    """Eventos do perfil que cruzam a janela, com os recorrentes já expandidos.
 
     Devolve `list[ItemAgenda]` ordenada pelo início efetivo (o da ocorrência,
     quando houver). Ocorrências não tocadas seguem virtuais — a expansão é sob
     demanda, nunca materializa série.
     """
     validar_janela(inicio, fim)
-    feriados = feriados_da_janela(inicio, fim)
+    feriados = feriados_da_janela(inicio, fim, dono)
 
     itens = [
         ItemAgenda(ev, None)
-        for ev in Evento.objects.filter(
-            regra_recorrencia__isnull=True, inicio__lt=fim, fim__gt=inicio
-        ).select_related("classe", "origem_tarefa")
+        for ev in Evento.objects.do_dono(dono)
+        .filter(regra_recorrencia__isnull=True, inicio__lt=fim, fim__gt=inicio)
+        .select_related("classe", "origem_tarefa")
     ]
 
     recorrentes = (
-        Evento.objects.filter(regra_recorrencia__isnull=False)
+        Evento.objects.do_dono(dono)
+        .filter(regra_recorrencia__isnull=False)
         .select_related("classe", "regra_recorrencia", "origem_tarefa")
         .prefetch_related("ocorrencias")
     )
@@ -78,8 +79,8 @@ def inicio_efetivo(item):
     return item.ocorrencia.inicio if item.ocorrencia else item.evento.inicio
 
 
-def pendentes(agora):
-    """Eventos rastreáveis cujo `status_efetivo` é PENDENTE (Handoff §8.4).
+def pendentes(dono, agora):
+    """Eventos rastreáveis do perfil cujo `status_efetivo` é PENDENTE (§8.4).
 
     PENDENTE é calculado, nunca gravado: filtramos pelas condições que o
     derivam (rastreável, ainda AGENDADO, `agora` já passou do fim). Cobre
@@ -87,7 +88,8 @@ def pendentes(agora):
     janela (ver `eventos_na_janela`).
     """
     return (
-        Evento.objects.filter(
+        Evento.objects.do_dono(dono)
+        .filter(
             regra_recorrencia__isnull=True,
             rastrear_conclusao=True,
             status=Evento.Status.AGENDADO,
