@@ -216,9 +216,10 @@ Planejamento por IA: `IA_PLANEJAMENTO_ENABLED` (1/0), `OLLAMA_BASE_URL`,
 com default): `PLANEJAR_TEMPO_BASE_S`, `PLANEJAR_TEMPO_POR_TAREFA_S`.
 
 Agente conversacional: `AGENTE_ENABLED` (1/0), `AGENTE_PROVIDER`
-(`ollama` local | `anthropic` remoto), `AGENTE_MODEL`, `ANTHROPIC_API_KEY` e
-`API_BASE_URL` — esta última precisa alcançar o `web` **de dentro do worker Celery**
-(no compose: `http://web:8000/api/v1`, e `web` tem de estar em `ALLOWED_HOSTS`).
+(`ollama` local | `anthropic` remoto), `AGENTE_MODEL` e `ANTHROPIC_API_KEY`.
+As ferramentas do agente chamam os services **em processo**, então não há
+`API_BASE_URL` do lado do Django; a variável sobrou só para o servidor MCP, e o
+`docker-compose.yml` já a define no serviço `mcp`.
 
 Feriados regionais: `FERIADOS_UF` (camada estadual offline via lib `holidays`; vazio
 desliga). Os municipais ficam no admin, em *Feriados locais*.

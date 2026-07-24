@@ -100,8 +100,8 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 
 | PR | Escopo | Bloqueio externo |
 | --- | --- | --- |
-| **PR0** | **Views finas + agente em processo** (0B.9) — pré-requisito estrutural, ver abaixo | nenhum 🔜 **próxima task** |
-| **PR1** | `Perfil` + `dono` + **default invertido** + unicidade por-dono + seed por-usuário (0B.3–0B.6, 0B.10) — enquanto não há JWT, um **perfil local default** resolve o `request.user` | nenhum |
+| **PR0** | **Views finas + agente em processo** (0B.9) — pré-requisito estrutural, ver abaixo | ✅ **feito** |
+| **PR1** | `Perfil` + `dono` + **default invertido** + unicidade por-dono + seed por-usuário (0B.3–0B.6, 0B.10) — enquanto não há JWT, um **perfil local default** resolve o `request.user` | nenhum 🔜 **próxima task** |
 | **PR2** | `SupabaseJWTAuthentication` + provisionamento JIT (0B.1–0B.2) — troca só *quem* resolve o `request.user`; fica estreito porque o PR1 já isolou tudo | **exige o projeto Supabase criado** |
 | **PR3** | Conta demo semeada + gate `pode_usar` stub (0B.7–0B.8) | depende do PR2 |
 

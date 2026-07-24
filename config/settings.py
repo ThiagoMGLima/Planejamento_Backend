@@ -181,10 +181,10 @@ AGENTE_ENABLED = env.bool("AGENTE_ENABLED", default=True)
 AGENTE_PROVIDER = env("AGENTE_PROVIDER", default="ollama")  # ollama | anthropic
 AGENTE_MODEL = env("AGENTE_MODEL", default="claude-opus-4-8")  # usado se anthropic
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
-# URL da PRÓPRIA API local: as ferramentas do agente batem nela (mesmos contratos
-# HTTP que o MCP server embrulha). No worker Celery precisa alcançar o web
-# (no compose: http://web:8000/api/v1).
-API_BASE_URL = env("API_BASE_URL", default="http://localhost:8000/api/v1")
+# Não há API_BASE_URL aqui de propósito (PR0 da Fase 0B): as ferramentas do
+# agente chamam os services EM PROCESSO, não a própria API por HTTP. Quem ainda
+# usa a variável é só o `mcp_server/` — container separado, que a lê do ambiente
+# (definida no serviço `mcp` do docker-compose.yml).
 
 # --- Feriados regionais (Marco C8) ---------------------------------------
 # UF para a camada estadual de feriados (lib `holidays`, offline). Vazio

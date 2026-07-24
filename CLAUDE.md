@@ -137,8 +137,12 @@ o aprendizado do zero), `RegistroExecucao` (alimenta os fatores adaptativos) e
   substituindo as sessões futuras.
 - `agente.py` — agente conversacional com **tool use multi-turno** (Marco C7). Já tem a
   abstração de provider (`_OllamaProvider` / Anthropic + factory por `AGENTE_PROVIDER`)
-  que a Fase 0A.1 vai estender ao resto. Chama a própria API por HTTP via
-  `settings.API_BASE_URL` — **sem header de auth** (ver 0B.9 no ROADMAP).
+  que a Fase 0A.1 vai estender ao resto. As ferramentas chamam os **services em
+  processo** (PR0 da Fase 0B) — antes era `requests` contra a própria API.
+- `tarefas.py` — `promover`/`planejar`/`criar` (regra que morava dentro das views).
+- `agenda.py` — janela de eventos expandida e pendentes. **Devolve objetos de
+  domínio, não DTOs**: assim `services/` não importa `serializers`, e cada consumidor
+  monta a própria forma (a view faz o JSON do contrato; o agente, o resumo digerido).
 - `aplicacao.py` — persiste as sessões do plano revisado (`/aplicar`).
 - `tempos.py` — estimativa adaptativa de duração dos jobs de IA (Marco C6).
 
@@ -180,13 +184,15 @@ Variáveis (ver `.env.example`):
   (default `qwen2.5:7b-instruct`), `OLLAMA_TIMEOUT`.
 - **Estimativa:** `PLANEJAR_TEMPO_BASE_S`, `PLANEJAR_TEMPO_POR_TAREFA_S`.
 - **Agente:** `AGENTE_ENABLED`, `AGENTE_PROVIDER` (`ollama|anthropic`), `AGENTE_MODEL`,
-  `ANTHROPIC_API_KEY`, `API_BASE_URL` (no worker precisa alcançar o `web`:
-  `http://web:8000/api/v1`).
+  `ANTHROPIC_API_KEY`. **Não há `API_BASE_URL` no settings** desde o PR0 — só o
+  `mcp_server/` usa essa variável, lida do ambiente pelo serviço `mcp` do compose.
 - **Feriados:** `FERIADOS_UF` (camada estadual offline; vazio desliga).
 
 ## Servidor MCP
 
 O serviço `mcp` do compose (`mcp_server/`, fora do Django) expõe as ferramentas do
 backend via Model Context Protocol em `http://localhost:8765/mcp` — camada fina sobre a
-API HTTP, **zero lógica de domínio**. Como o `agente.py`, chama a API por `API_BASE_URL`
-sem autenticação.
+API HTTP, **zero lógica de domínio**. Chama a API por `API_BASE_URL`, hoje sem
+autenticação. É a **única** fronteira HTTP que sobra (o agente passou a chamar os
+services em processo); por ser container separado servindo clientes externos, é ali
+que entra a credencial de serviço da Fase 0B.

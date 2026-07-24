@@ -4,7 +4,7 @@ Marco 3 acrescenta: janela de eventos com expansão de ocorrências, transiçõe
 concluir/remarcar (com escopo), pendentes e feriados.
 """
 
-from datetime import date, timedelta
+from datetime import date
 from uuid import uuid4
 
 from celery.result import AsyncResult
@@ -39,16 +39,17 @@ from .serializers import (
 )
 from .services import (
     adaptacao,
+    agenda,
     aplicacao,
     completion,
     holidays,
     planejamento,
     planejamento_ia,
     replanejamento,
+    tarefas,
     tempos,
 )
-from .services.planejamento import HORIZONTES, JANELA_MAX
-from .services.recurrence import expandir
+from .services.planejamento import HORIZONTES
 
 
 @api_view(["GET"])
@@ -89,35 +90,17 @@ class TarefaViewSet(viewsets.ModelViewSet):
         entrada.is_valid(raise_exception=True)
         dados = entrada.validated_data
 
-        classe = dados.get("classe") or tarefa.classe
-        if classe is None:
+        try:
+            evento = tarefas.promover(
+                tarefa,
+                inicio=dados["inicio"],
+                fim=dados.get("fim"),
+                classe=dados.get("classe"),
+            )
+        except ValueError as e:
             return Response(
-                {"classe_id": ["Tarefa sem classe; informe classe_id."]},
-                status=http_status.HTTP_400_BAD_REQUEST,
+                {"classe_id": [str(e)]}, status=http_status.HTTP_400_BAD_REQUEST
             )
-
-        inicio = dados["inicio"]
-        fim = dados.get("fim")
-        if fim is None:
-            if tarefa.esforco_estimado:
-                fim = inicio + timedelta(minutes=tarefa.esforco_estimado)
-            else:
-                fim = inicio + timedelta(hours=1)
-
-        with transaction.atomic():
-            evento = Evento.objects.create(
-                titulo=tarefa.titulo,
-                descricao=tarefa.descricao,
-                inicio=inicio,
-                fim=fim,
-                classe=classe,
-                # Default: todo evento acompanha conclusão (independe da classe).
-                rastrear_conclusao=True,
-                status=Evento.Status.AGENDADO,
-                origem_tarefa=tarefa,
-            )
-            tarefa.status = Tarefa.Status.PROMOVIDA
-            tarefa.save(update_fields=["status", "atualizado_em"])
 
         return Response(
             EventoSerializer(evento).data, status=http_status.HTTP_201_CREATED
@@ -136,29 +119,14 @@ class TarefaViewSet(viewsets.ModelViewSet):
         entrada.is_valid(raise_exception=True)
         dados = entrada.validated_data
 
-        classe = dados.get("classe") or tarefa.classe
-        if classe is None:
-            return Response(
-                {"classe_id": ["Tarefa sem classe; informe classe_id."]},
-                status=http_status.HTTP_400_BAD_REQUEST,
+        try:
+            eventos = tarefas.planejar(
+                tarefa, sessoes=dados["sessoes"], classe=dados.get("classe")
             )
-
-        with transaction.atomic():
-            eventos = [
-                Evento.objects.create(
-                    titulo=tarefa.titulo,
-                    descricao=tarefa.descricao,
-                    inicio=s["inicio"],
-                    fim=s["fim"],
-                    classe=classe,
-                    rastrear_conclusao=True,
-                    status=Evento.Status.AGENDADO,
-                    origem_tarefa=tarefa,
-                )
-                for s in dados["sessoes"]
-            ]
-            tarefa.status = Tarefa.Status.PROMOVIDA
-            tarefa.save(update_fields=["status", "atualizado_em"])
+        except ValueError as e:
+            return Response(
+                {"classe_id": [str(e)]}, status=http_status.HTTP_400_BAD_REQUEST
+            )
 
         return Response(
             EventoSerializer(eventos, many=True).data,
@@ -179,37 +147,23 @@ class EventoViewSet(viewsets.ModelViewSet):
         """
         inicio = self._parse_janela(request.query_params.get("inicio"), "inicio")
         fim = self._parse_janela(request.query_params.get("fim"), "fim")
-        if fim <= inicio:
-            raise ValidationError({"fim": "fim deve ser maior que inicio."})
-        if fim - inicio > JANELA_MAX:
-            raise ValidationError({"detail": "Janela máxima de ~92 dias."})
+        try:
+            itens = agenda.eventos_na_janela(inicio, fim)
+        except agenda.JanelaInvalida as e:
+            # `fim` inválido é erro de campo; o teto da janela é erro geral.
+            campo = "fim" if "maior que inicio" in str(e) else "detail"
+            raise ValidationError({campo: str(e)})
 
-        feriados = set()
-        for ano in range(inicio.year, fim.year + 1):
-            feriados |= holidays.feriados_do_ano(ano)
-
-        itens = []
-        # Eventos não recorrentes que cruzam a janela.
-        simples = Evento.objects.filter(
-            regra_recorrencia__isnull=True, inicio__lt=fim, fim__gt=inicio
-        ).select_related("classe", "origem_tarefa")
-        for ev in simples:
-            payload = EventoSerializer(ev).data
-            payload["ocorrencia"] = None
-            itens.append(payload)
-
-        # Eventos recorrentes: expande dentro da janela.
-        recorrentes = (
-            Evento.objects.filter(regra_recorrencia__isnull=False)
-            .select_related("classe", "regra_recorrencia", "origem_tarefa")
-            .prefetch_related("ocorrencias")
+        return Response(
+            [
+                (
+                    self._payload_ocorrencia(item.evento, item.ocorrencia)
+                    if item.ocorrencia
+                    else {**EventoSerializer(item.evento).data, "ocorrencia": None}
+                )
+                for item in itens
+            ]
         )
-        for ev in recorrentes:
-            for view in expandir(ev, inicio, fim, feriados):
-                itens.append(self._payload_ocorrencia(ev, view))
-
-        itens.sort(key=lambda x: x["inicio"])
-        return Response(itens)
 
     @staticmethod
     def _parse_janela(valor, campo):
@@ -317,17 +271,7 @@ def pendentes(request):
     agora > fim). Cobre eventos não recorrentes; ocorrências recorrentes
     pendentes dependem de janela (ver GET /eventos).
     """
-    agora = timezone.now()
-    qs = (
-        Evento.objects.filter(
-            regra_recorrencia__isnull=True,
-            rastrear_conclusao=True,
-            status=Evento.Status.AGENDADO,
-            fim__lt=agora,
-        )
-        .select_related("classe", "origem_tarefa")
-        .order_by("fim")
-    )
+    qs = agenda.pendentes(timezone.now())
     return Response(EventoSerializer(qs, many=True).data)
 
 
