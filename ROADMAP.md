@@ -24,6 +24,20 @@
 7. **1 pessoa = 1 conta.** App pessoal; sem workspaces/times.
 8. **O moat é o motor de planejamento adaptativo** (solver + diretrizes de IA +
    preferência revelada), não o calendário.
+9. **Propriedade de segurança não depende de lembrar.** Ao proteger um invariante
+   (ex.: *"nenhuma consulta devolve linha de outro dono"*), escolha o mecanismo pela
+   força — nesta ordem, e **nunca abaixo de "falha no teste"**:
+
+   | Força | Mecanismo |
+   | --- | --- |
+   | Impossível por construção | o estado errado não é representável |
+   | Falha no boot | erro ao subir a aplicação |
+   | **Falha no teste** | ← piso aceitável (ex.: parâmetro obrigatório ⇒ `TypeError`) |
+   | Falha na revisão | alguém precisa reparar no diff |
+   | Convenção documentada | ninguém garante nada |
+
+   Corolário: **UUID difícil de adivinhar não é fronteira**, é obscuridade. Se a única
+   coisa entre um usuário e o dado de outro é não saber o id, não há isolamento.
 
 **Legenda:** ✅ feito · 🔜 próximo/ativo · ⏳ depois · 💡 decisão em aberto
 
@@ -55,10 +69,10 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 
 > **Ordem decidida (24/07/2026): a 0B é a espinha, a 0A é encaixe.** A 0B tem **custo
 > de atraso** — o `dono` atravessa 8 models, ~340 linhas de serializers, ~820 de views,
-> ~2.600 de testes, 2 seeds e o servidor MCP; toda feature escrita antes dele vira
+> ~3.800 de testes, 2 seeds e o servidor MCP; toda feature escrita antes dele vira
 > trabalho a mais dentro da 0B (é o princípio nº 2 aplicado). A 0A não cresce com o
-> tempo: são 3 pontos de chamada, e o padrão já existe pronto. Logo, **começar por
-> 0B.1-PR1** e encaixar a 0A entre PRs / enquanto a 0B estiver bloqueada por Supabase.
+> tempo: são 3 pontos de chamada, e o padrão já existe pronto. Logo, **começar pelo
+> PR0 da 0B** e encaixar a 0A entre PRs / enquanto a 0B estiver bloqueada por Supabase.
 
 ### 0A — Provider trocável + empacotamento
 - **0A.1 Abstração `LLMProvider`** em `planejamento_ia.py`: `gerar_diretrizes(contexto)
@@ -81,14 +95,23 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 
 ### 0B — Contas + autenticação (fundação, puxada pra frente)
 
-**Quebrado em 3 PRs** — a 0B inteira num PR é grande demais, e o primeiro **não
-depende do Supabase** (dá pra começar já):
+**Quebrado em 4 PRs** — a 0B inteira num PR é grande demais, e os dois primeiros
+**não dependem do Supabase** (dá pra começar já):
 
 | PR | Escopo | Bloqueio externo |
 | --- | --- | --- |
-| **PR1** | `Perfil` + `dono` + isolamento + unicidade por-dono + seed por-usuário (0B.3–0B.6, 0B.9) — enquanto não há JWT, um **perfil local default** resolve o `request.user` | nenhum 🔜 **próxima task** |
+| **PR0** | **Views finas + agente em processo** (0B.9) — pré-requisito estrutural, ver abaixo | nenhum 🔜 **próxima task** |
+| **PR1** | `Perfil` + `dono` + **default invertido** + unicidade por-dono + seed por-usuário (0B.3–0B.6, 0B.10) — enquanto não há JWT, um **perfil local default** resolve o `request.user` | nenhum |
 | **PR2** | `SupabaseJWTAuthentication` + provisionamento JIT (0B.1–0B.2) — troca só *quem* resolve o `request.user`; fica estreito porque o PR1 já isolou tudo | **exige o projeto Supabase criado** |
 | **PR3** | Conta demo semeada + gate `pode_usar` stub (0B.7–0B.8) | depende do PR2 |
+
+> **Por que um PR0.** A análise do PR1 (`docs/tasks/fase0b-pr1-dono.md`) mostrou que
+> os problemas encontrados não eram 4 bugs independentes, e sim **um default errado**:
+> toda consulta nasce global e a segurança depende de alguém lembrar de escopar, 32
+> vezes seguidas, para sempre. Em vez de remendar os 32 pontos, o desenho passa a
+> **inverter o default** (ver 0B.10) — e isso exige antes que o agente pare de ser
+> cliente HTTP de si mesmo (0B.9), senão ele continua atravessando a fronteira de auth
+> sem necessidade. Misturar as duas coisas num PR só produziria um diff irrevisável.
 
 - **0B.1 Supabase Auth** (projeto compartilhado, na nuvem): login **Google + email**;
   frontend usa `supabase-js` só pro login e manda o JWT ao Django.
@@ -98,20 +121,49 @@ depende do Supabase** (dá pra começar já):
 - **0B.4 `dono = FK(Perfil)`** nos models-raiz (Classe, Tarefa, Evento, RegraRecorrencia,
   PesoPreferencia, EscolhaCenario, RegistroExecucao, FeriadoLocal); filhos herdam pelo pai.
 - **0B.5 Unicidade por-dono** (`Classe.nome`, `FeriadoLocal` deixam de ser globais);
-  mixin de queryset filtrando por `request.user`; serializers gravam `dono` do request,
-  nunca do cliente.
+  serializers gravam `dono` do request, **nunca do cliente** — e o `queryset` dos
+  `PrimaryKeyRelatedField` também é escopado (sem isso, um usuário anexa a **classe de
+  outro** ao próprio evento: 4 pontos em `serializers.py`).
   > ⚠️ **`PesoPreferencia.metrica` também é `unique=True` global** (`models.py:145`) e
   > não estava nesta lista. Sem virar unicidade por-dono, o primeiro usuário a gravar
   > um peso **trava o aprendizado de todos os outros**. Revisar `EscolhaCenario`,
   > `RegistroExecucao` e o `uq_feriadolocal_data` com o mesmo olho.
 - **0B.6 Seed das 5 classes padrão** vira **por-usuário** (no Perfil, JIT) — não mais global.
-- **0B.9 Propagação de identidade para o agente e o MCP** (novo, entra no PR1).
-  `services/agente.py:50` e `mcp_server/server.py:38` montam URLs a partir de
-  `API_BASE_URL` e chamam a API **sem header de autenticação**. No instante em que a
-  auth entrar, os dois tomam **401** — e o agente roda **no worker Celery, fora do
-  request do usuário**, então precisa carregar o token de quem disparou o job (ou uma
-  credencial de serviço + `dono` explícito no payload da task). É decisão de desenho:
-  resolver junto com o mixin no PR1, não descobrir no PR2.
+- **0B.9 Views finas + agente em processo** (**PR0**). Hoje `services/agente.py:47` é
+  **código Django fazendo HTTP para o próprio Django**: monta a URL a partir de
+  `API_BASE_URL` e sai pela rede para chegar onde já estava — atravessando auth,
+  serialização e o ciclo de request. Quando a auth entrar, toma **401**, e "resolver"
+  isso significaria pôr credencial de usuário na fila do Celery (o Redis do compose não
+  tem senha e persiste em disco).
+
+  **Decisão: as ferramentas do agente passam a chamar os services em processo.** O
+  `dono_id` já vem no payload da task — sem token, sem 401, sem expiração, e mais
+  rápido. O **MCP server continua HTTP** e continua precisando de credencial: ele é
+  container separado servindo clientes externos, então ali a fronteira é legítima e
+  fica estreita.
+
+  Pré-requisito: `promover` e `planejar` têm regra de negócio **dentro da view**
+  (`views.py:107-166` cria `Evento` e atualiza `Tarefa` inline, sem service). Precisam
+  descer para `services/` — que é o que o `CLAUDE.md` já declara como arquitetura
+  ("DRF fino: as views delegam para `planner/services/`"). O PR0 não inventa regra
+  nova; faz o código cumprir a que já está escrita.
+
+- **0B.10 Inverter o default: acesso global vira explícito** (**PR1**, decisão central).
+  O manager default dos 8 models-raiz **exige escopo** — `Evento.objects.all()`
+  levanta. Quem precisa do global escreve `Evento.objects.sem_escopo()`, que é
+  **grepável e aparece na revisão** (usam isso os seeds e o admin; mais ninguém).
+
+  Junto: **identidade é parâmetro do domínio, nunca ambiente.** Os ~17 pontos de
+  service recebem `dono` como argumento **obrigatório** — nada de `contextvar`. O
+  motivo é o worker: metade das chamadas nasce fora de um request, e com contexto
+  implícito o `dono` vem `None` no Celery, o filtro não acontece e o solver passa a
+  tratar a agenda de **todos** como "ocupado" — sem exceção e sem log. Pior: **a suíte
+  não pega**, porque roda com um perfil só, onde "global" e "do dono" são o mesmo
+  conjunto. Com parâmetro obrigatório, é `TypeError` na primeira execução.
+
+  E **jobs assíncronos carregam o dono** no payload, na chave de cache e no resultado;
+  os 5 endpoints de status conferem posse. Hoje eles devolvem o resultado a quem
+  apresentar o `job_id` — o que inclui títulos de tarefas e a agenda inteira.
 - **0B.7 Conta default de teste + signup:** um usuário demo (credenciais compartilhadas)
   com `seed_demo` no escopo dele, pra o testador entrar e mexer na hora; **e** criação de
   contas novas próprias (testa signup + isolamento entre contas).
@@ -220,10 +272,14 @@ O grosso da fundação já foi no beta (Fase 0B). Aqui fica o que é específico
 - ✅ **Dados de domínio no beta:** decidido — **Postgres local por testador** (ver
   "Arquitetura do beta").
 - ✅ **Ordem 0A vs 0B:** decidido (24/07/2026) — **0B primeiro** (custo de atraso do
-  `dono`), quebrada em 3 PRs; 0A encaixa entre PRs.
-- **Identidade do agente/MCP nas chamadas HTTP** (0B.9): token do usuário propagado
-  pela task Celery **vs** credencial de serviço. Decidir no plano do PR1.
+  `dono`), quebrada em 4 PRs; 0A encaixa entre PRs.
+- ✅ **Identidade do agente** (0B.9): decidido — **ferramentas em processo**, sem HTTP e
+  sem credencial. O MCP segue HTTP e ganha credencial de serviço própria.
+- ✅ **Threading do `dono` nos services** (0B.10): decidido — **parâmetro obrigatório**,
+  não `contextvar` (o contexto implícito falha em silêncio no worker Celery).
 - **Unificar `AGENTE_PROVIDER` e `LLM_PROVIDER`** num só env (0A.1) ou manter separados.
+- **Identidade do `Perfil` antes do Supabase, destino dos dados de dev, `FeriadoLocal`
+  por-dono vs catálogo, escopo do admin** — Q3–Q6 de `docs/tasks/fase0b-pr1-dono.md`.
 - **IA local vs API** — aguarda dado da Fase 0.
 - **Regras de negócio a mudar** — aguarda dogfooding (Fase 1).
 - **Hospedar (Fork A) vs desktop nativo (Fork B)** pros leigos — decidir após o beta.
