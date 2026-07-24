@@ -113,6 +113,23 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
 — os únicos que provam isolamento, porque usam **dois** perfis; o resto roda com um
 só, onde "global" e "do dono" coincidem.
 
+### Onde estamos agora (24/07/2026)
+
+- **PR0 + PR1 estão no PR #23**, aberto contra `main` (branch
+  `claude/0b-perfil-dono-e-escopo`), **mergeable, aguardando review/merge**. Frontend
+  já rodou os E2E e confirmou verde (o gate do passo 9). Não reabra nem recrie — se
+  precisar, `gh pr view 23`.
+- **Próxima task: 0B / PR2 — Supabase Auth.** 🚧 **bloqueada** no projeto Supabase, que
+  é do usuário. Roteiro na seção 8 de `docs/tasks/contexto-0b-pr1.md`. Lembrar: o PR2
+  tem uma **parte de frontend** (login via `supabase-js` + `Authorization: Bearer`),
+  hoje descrita no ROADMAP só como backend.
+- **Task de encaixe enquanto o Supabase não vem: 0A.1** (abstração `LLMProvider`) —
+  não depende de nada externo; começar pelo passo 2 do ciclo (análise).
+- **Backlog anotado, para não perder:** (a) o comparador às vezes mostra só 2 cenários
+  porque `MAX_CENARIOS=4` conta a base — vira task de backend (nota do frontend em
+  `../../Frontend/Planejamento_Frontend/docs/rotina-inteligente/BACKEND-base-fora-do-lote.md`);
+  (b) registrar no ROADMAP a parte de frontend do PR2.
+
 ## Layout
 
 Este diretório (`Planejamento_Backend/`, onde mora este arquivo) é a raiz do
