@@ -104,6 +104,38 @@ def test_do_dono_none_e_recusado(perfil):
         list(Tarefa.objects.do_dono(None))
 
 
+def test_raw_sql_e_recusado(perfil):
+    """`raw()` devolve um RawQuerySet, que não passa pela guarda do QuerySet.
+
+    Era a única porta dos fundos que a auditoria encontrou: todos os outros
+    caminhos de avaliação (values_list, aggregate, dates, in_bulk, contains,
+    iterator…) caem na guarda. Deixá-la aberta seria isolamento no nível
+    "convenção documentada", que o princípio 9 recusa.
+    """
+    with pytest.raises(EscopoAusente):
+        list(Tarefa.objects.raw("SELECT id FROM planner_tarefa"))
+
+    # A saída explícita continua existindo para quem precisar mesmo de SQL cru.
+    assert list(Tarefa._base_manager.raw("SELECT id FROM planner_tarefa")) == []
+
+
+def test_plano_nao_nasce_sem_dono():
+    """`ResultadoPlano` exige `dono`. Com default `None`, um plano sem dono
+    passaria calado e só estouraria adiante, em `adaptacao.fator_classe`, como
+    um AttributeError sem relação aparente com a causa."""
+    with pytest.raises(TypeError):
+        planejamento.ResultadoPlano(
+            sessoes=[],
+            nao_alocado=[],
+            prefs=None,
+            prefs_usadas={},
+            tarefas=[],
+            ocupado=[],
+            agora=SEG,
+            horizonte_fim=SEG,
+        )
+
+
 # --------------------------------------------------------------------------- #
 # 2. CRUD pela API: o vizinho não existe                                       #
 # --------------------------------------------------------------------------- #

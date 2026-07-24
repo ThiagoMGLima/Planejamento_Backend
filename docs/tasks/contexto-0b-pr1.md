@@ -87,7 +87,8 @@ contexto da IA e os cenários não precisarem recebê-lo por fora.
   requisição. Era o vazamento mais fácil de deixar passar: sem escopo o DRF
   responde 201, porque do ponto de vista dele o id existe.
 - **Jobs** — `job_id` deixou de ser credencial. Registro de posse em
-  `job_dono:{id}` e 404 nos 5 endpoints de status + `escolher` e `refinar`.
+  `job_dono:{id}` e 404 nos **4** endpoints de status + `escolher` e `refinar`
+  (6 pontos). *O plano falava em "5 endpoints"; a contagem correta é 4.*
 - **Agente** — as ferramentas recebem `dono` como primeiro **posicional**, e o
   dispatch o passa por fora do `**tc.args`. Estrutural: nenhuma saída do LLM
   chega perto de decidir de quem são os dados.
@@ -139,9 +140,31 @@ Dois defeitos meus nos próprios testes de isolamento, corrigidos: um `EventoFac
 sem `status` explícito (o factory não tem default) e um assert de igualdade exata
 em feriados que ignorava o feriado de Curitiba herdado no backfill.
 
+### 5.1 Achados da revisão contra a documentação (depois do PR fechado)
+
+Uma passada do código contra `CLAUDE.md`/`README.md`/`ROADMAP.md` encontrou mais
+três coisas, todas corrigidas:
+
+- **`objects.raw()` escapava da guarda.** Sondando os caminhos de avaliação um a
+  um, `raw()` foi o único que passou: devolve um `RawQuerySet`, que não herda nada
+  do `EscopoQuerySet`. Bloqueado no manager, com `_base_manager.raw(...)` como
+  saída explícita. Todos os outros (`values_list`, `aggregate`, `dates`, `in_bulk`,
+  `contains`, `iterator`, `none()`…) já caíam na guarda.
+- **`ResultadoPlano.dono` tinha default `None`.** Contradizia a própria tese do PR
+  ("identidade é parâmetro obrigatório"): um plano nasceria sem dono em silêncio e
+  só estouraria adiante, em `adaptacao.fator_classe(None, …)`, como um
+  `AttributeError` sem relação aparente com a causa. Virou obrigatório — e o
+  compilador apontou 3 construções que o omitiam (todas em testes de função pura,
+  que agora passam `dono=None` **explícito**).
+- **Um comando do `README.md` estava quebrado**: o `shell -c` que lista as classes
+  padrão usava `Classe.objects.values_list(...)`, que agora levanta `EscopoAusente`.
+
+E dois números errados nesta própria nota, corrigidos acima: são **4** endpoints de
+status (não 5) e **17** `@permission_classes` (não 18).
+
 ## 6. Como foi verificado
 
-- **270 testes verdes**, incluindo **39 novos de isolamento** (`test_isolamento.py`).
+- **277 testes verdes**, incluindo **41 de isolamento** (`test_isolamento.py`).
 - `ruff`, `black --check`, `makemigrations --check --dry-run` limpos.
 - **Migrations aplicadas no banco de dev**: 23 tarefas, 28 eventos, 8 regras, 15
   registros, 5 classes e 1 feriado — **zero órfãos**, todos no perfil local.
@@ -160,7 +183,7 @@ há o que autenticar enquanto a API não tem autenticação nenhuma; a credencia
 faz sentido junto com o `SupabaseJWTAuthentication`. O MCP segue funcionando, sem
 auth, operando no perfil local (é quem a API resolve).
 
-`AllowAny` e os 18 `@permission_classes` continuam como estavam, de propósito: o
+`AllowAny` e os **17** `@permission_classes` continuam como estavam, de propósito: o
 PR2 inverte o default e os remove, menos em `/health`.
 
 ## 8. Onde a próxima task começa
@@ -177,9 +200,9 @@ O PR1 deixou o PR2 estreito. O que ele precisa fazer:
    primeiro login do **usuário**, gravar o `supabase_id` no **perfil local
    existente** em vez de criar conta nova (decisão Q4) — é o que preserva o
    `seed_demo` de dev.
-4. Inverter `DEFAULT_PERMISSION_CLASSES` e remover os 18 `@permission_classes`
+4. Inverter `DEFAULT_PERMISSION_CLASSES` e remover os **17** `@permission_classes`
    (exceto `/health`).
 5. Credencial de serviço do MCP (herdada deste PR, ver seção 7).
 
-Os 39 testes de isolamento continuam valendo palavra por palavra depois do PR2 —
+Os 41 testes de isolamento continuam valendo palavra por palavra depois do PR2 —
 muda só quem responde "quem é você". Se algum deles quebrar lá, é regressão real.

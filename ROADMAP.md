@@ -84,11 +84,12 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   `MockProvider`, por env (`LLM_PROVIDER=ollama|api|mock`). `validar_diretrizes`
   (guarda-corpo) segue independente do provider. **Default `ollama`** (nada muda pra
   quem roda local).
-  > **Mais barato do que parece:** `services/agente.py:340-480` **já tem** esse padrão
+  > **Mais barato do que parece:** `services/agente.py` (classes `_OllamaProvider` /
+  > `_AnthropicProvider` e a factory `_criar_provider`) **já tem** esse padrão
   > (`_OllamaProvider`, provider Anthropic, factory por `AGENTE_PROVIDER`) — só que
   > para a forma *multi-turno com tool use*. Falta estendê-lo à forma *chamada única
   > com JSON schema forçado*, nos 3 pontos que ainda instanciam `ollama.Client` direto:
-  > `planejamento_ia.py:199`, `cenarios.py:199` e `cenarios.py:278`. Considerar
+  > `planejamento_ia.py`, `cenarios.py` (2×) — procure por `ollama.Client(`. Considerar
   > unificar `AGENTE_PROVIDER` e `LLM_PROVIDER` em vez de manter dois envs.
 - **0A.2 Empacotamento local:** auto-pull do modelo no boot + **profiles do compose**
   (`--profile local` sobe Ollama; `--profile api` não sobe).
@@ -141,12 +142,13 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   para quando houver seleção de município.
 - **0B.6 Seed das 5 classes padrão** — ✅ feito no PR1: saiu da migration `0002` para
   `services/perfis.seed_classes_padrao()`, por perfil. O PR2 o chama no provisionamento JIT.
-- **0B.9 Views finas + agente em processo** (**PR0**). Hoje `services/agente.py:47` é
-  **código Django fazendo HTTP para o próprio Django**: monta a URL a partir de
-  `API_BASE_URL` e sai pela rede para chegar onde já estava — atravessando auth,
-  serialização e o ciclo de request. Quando a auth entrar, toma **401**, e "resolver"
-  isso significaria pôr credencial de usuário na fila do Celery (o Redis do compose não
-  tem senha e persiste em disco).
+- **0B.9 Views finas + agente em processo** (**PR0**) — ✅ **feito**. *O texto abaixo
+  descreve o problema como ele era, antes do PR0.* `services/agente.py` era **código
+  Django fazendo HTTP para o próprio Django**: montava a URL a partir de `API_BASE_URL`
+  e saía pela rede para chegar onde já estava — atravessando auth, serialização e o
+  ciclo de request. Com a auth, tomaria **401**, e "resolver" isso significaria pôr
+  credencial de usuário na fila do Celery (o Redis do compose não tem senha e persiste
+  em disco).
 
   **Decisão: as ferramentas do agente passam a chamar os services em processo.** O
   `dono_id` já vem no payload da task — sem token, sem 401, sem expiração, e mais
@@ -154,9 +156,9 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   container separado servindo clientes externos, então ali a fronteira é legítima e
   fica estreita.
 
-  Pré-requisito: `promover` e `planejar` têm regra de negócio **dentro da view**
-  (`views.py:107-166` cria `Evento` e atualiza `Tarefa` inline, sem service). Precisam
-  descer para `services/` — que é o que o `CLAUDE.md` já declara como arquitetura
+  Pré-requisito (também já feito): `promover` e `planejar` tinham regra de negócio
+  **dentro da view** — criavam `Evento` e atualizavam `Tarefa` inline, sem service.
+  Desceram para `services/tarefas.py` — que é o que o `CLAUDE.md` já declara como arquitetura
   ("DRF fino: as views delegam para `planner/services/`"). O PR0 não inventa regra
   nova; faz o código cumprir a que já está escrita.
 
@@ -176,7 +178,7 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   conjunto. Com parâmetro obrigatório, é `TypeError` na primeira execução.
 
   E **jobs assíncronos carregam o dono** no payload, na chave de cache e no resultado;
-  os 5 endpoints de status conferem posse. Hoje eles devolvem o resultado a quem
+  os endpoints que dereferenciam um `job_id` conferem posse. Hoje eles devolvem a quem
   apresentar o `job_id` — o que inclui títulos de tarefas e a agenda inteira.
 - **0B.7 Conta default de teste + signup:** um usuário demo (credenciais compartilhadas)
   com `seed_demo` no escopo dele, pra o testador entrar e mexer na hora; **e** criação de

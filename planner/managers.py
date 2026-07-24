@@ -113,3 +113,19 @@ class EscopoQuerySet(models.QuerySet):
 class EscopoManager(models.Manager.from_queryset(EscopoQuerySet)):
     """Manager default dos models por-dono. `create()` segue livre — o `dono`
     é NOT NULL no banco, então criar sem ele falha na hora, sem precisar de guarda."""
+
+    def raw(self, *args, **kwargs):
+        """SQL cru não passa pelo QuerySet, logo não passa pela guarda.
+
+        Bloqueado em vez de documentado: por baixo, `raw()` devolve um
+        `RawQuerySet` que não herda nada daqui, então deixá-lo aberto seria uma
+        porta dos fundos silenciosa — o nível "convenção documentada" que o
+        princípio 9 do ROADMAP recusa. Quem realmente precisar de SQL cru usa
+        `Model._base_manager.raw(...)`, que é explícito e grepável.
+        """
+        raise EscopoAusente(
+            f"{self.model.__name__}.objects.raw() não é escopado por dono. "
+            "Use o ORM com `.do_dono(perfil)`, ou "
+            f"`{self.model.__name__}._base_manager.raw(...)` se o SQL cru for "
+            "mesmo necessário (e então escope na mão)."
+        )

@@ -1,8 +1,9 @@
 # Planejador de Rotina — Backend
 
-API REST em Django/DRF para o Planejador de Rotina. **Projeto pessoal, 100%
-local e single-user** — roda na máquina do dono via Docker, sem deploy em nuvem
-e **sem autenticação** (acesso só em `localhost`).
+API REST em Django/DRF para o Planejador de Rotina. Roda via Docker, sem deploy
+em nuvem e **ainda sem autenticação** (acesso só em `localhost`) — mas o schema e
+todo o caminho de dados **já são multi-tenant**: existe `Perfil`, os models-raiz
+têm FK `dono` obrigatória e as consultas são escopadas (Fase 0B / PR1).
 
 - **Frontend (SPA Vite):** <https://github.com/ThiagoMGLima/Planejador_Frontend>
   — consome esta API; configure a origem dele em `CORS_ALLOWED_ORIGINS`.
@@ -10,11 +11,12 @@ e **sem autenticação** (acesso só em `localhost`).
 - **Plano de execução:** `PLAN.md` (4 marcos, um PR cada).
 - **Mapa de produto:** `ROADMAP.md` — a evolução de projeto pessoal para produto,
   com o método de trabalho por task.
-- **Desvios deliberados do handoff** (por ser local/single-user): sem JWT, sem
-  endpoints `/auth/*`, sem `IsAuthenticated`/`IsOwner`, sem FK `dono` nos models
-  e sem filtro de queryset por dono.
-  > Em revisão: a **Fase 0B do `ROADMAP.md`** (ativa) traz `Perfil`, `dono` e
-  > Supabase Auth de volta, para o beta com amigos técnicos.
+- **Desvios do handoff que ainda valem:** sem JWT, sem endpoints `/auth/*`, sem
+  `IsAuthenticated`/`IsOwner` — a API segue aberta em `localhost`.
+  > **`dono` e filtro por dono deixaram de ser desvio** (Fase 0B / PR1): os 8
+  > models-raiz têm `dono` obrigatório, a unicidade é por-dono e o manager
+  > **recusa consulta sem escopo**. Falta só quem diz *quem é o usuário* — é o
+  > PR2 (Supabase Auth). Ver `docs/tasks/contexto-0b-pr1.md`.
 
 ## Status
 
@@ -45,7 +47,16 @@ Ollama local que aperfeiçoa o plano. Ver abaixo.
 - **C6** — estimativa adaptativa da duração dos jobs de IA.
 - **C8** — feriados regionais (estadual por UF, offline + municipal manual).
 
-**Próximo:** Fase 0B do `ROADMAP.md` — `Perfil`, `dono` e Supabase Auth.
+**Fase 0B — Contas** 🔜 em andamento (4 PRs):
+
+- **PR0** ✅ views finas + ferramentas do agente chamando os services em processo.
+- **PR1** ✅ `Perfil`, FK `dono` nos 8 models-raiz, unicidade por-dono e o manager
+  que exige escopo; 41 testes de isolamento com dois perfis.
+- **PR2** 🔜 `SupabaseJWTAuthentication` + provisionamento JIT — **bloqueado**: exige
+  o projeto Supabase criado.
+- **PR3** ⏳ conta demo + gate de pagamento stub.
+
+**Próximo:** PR2. Contexto em `docs/tasks/README.md`.
 
 ## Planejamento (solver + IA)
 
@@ -66,8 +77,9 @@ um plano de sessões de produção:
 
 O **horizonte** do plano é escolhível (`AUTOMATICO` | `SEMANA` | `DUAS_SEMANAS`
 | `MES`); quanto maior, mais tarefas entram no escopo e mais a IA "pensa" — daí o
-endpoint de **estimativa** de tempo antes de gerar. A IA roda em **CPU** por
-padrão (`qwen2.5:7b-instruct`), na casa de dezenas de segundos por plano.
+endpoint de **estimativa** de tempo antes de gerar. O compose roda o Ollama na
+**GPU AMD via ROCm** (`qwen2.5:7b-instruct`); em máquina sem `/dev/kfd` cai para
+CPU pelo override abaixo, na casa de dezenas de segundos por plano.
 
 ## Rodando localmente
 
@@ -113,9 +125,11 @@ docker compose exec ollama ollama pull qwen2.5:7b-instruct
 # criar superuser para o admin
 docker compose exec web python manage.py createsuperuser
 
-# conferir as 5 classes padrão
+# conferir as 5 classes padrão do perfil local
+# (`Classe.objects.values_list(...)` sozinho levanta EscopoAusente — ver "Escopo por dono")
 docker compose exec web python manage.py shell -c \
-  "from planner.models import Classe; print(list(Classe.objects.values_list('nome', flat=True)))"
+  "from planner.services.perfis import perfil_local; from planner.models import Classe; \
+   print(list(Classe.objects.do_dono(perfil_local()).values_list('nome', flat=True)))"
 
 # popular dados de exemplo (--clear zera tarefas/eventos antes; mantém classes)
 docker compose exec web python manage.py seed_demo --clear           # dataset variado, com histórico
@@ -124,6 +138,24 @@ docker compose exec web python manage.py seed_planejamento --clear    # dataset 
 
 Os dois seeds **não convivem** — `--clear` zera tarefas e eventos, então rodar um
 substitui o dataset do outro. Sem `--clear` eles **acumulam** (não são idempotentes).
+Ambos aceitam `--dono <email>` e escrevem **num perfil só** (default: o local); o
+`--clear` também respeita esse escopo e nunca toca em dados de outra conta.
+
+## Escopo por dono
+
+Desde a Fase 0B / PR1, o manager dos models-raiz **recusa consulta sem escopo** —
+isolamento entre contas é o default, não uma convenção a lembrar:
+
+```python
+Evento.objects.do_dono(perfil).filter(...)   # o caminho normal
+Evento.objects.sem_escopo().filter(...)      # varredura global — só seeds e admin
+Evento.objects.all()                         # levanta EscopoAusente
+```
+
+Vale para `shell`, scripts e qualquer código novo; os related managers reversos
+(`tarefa.eventos.all()`) herdam a guarda. Enquanto não há login,
+`services/perfis.perfil_do_request()` devolve sempre o **perfil local** — é a
+única função que o PR2 vai trocar. Detalhe em `CLAUDE.md`, seção "Escopo por dono".
 
 ## Endpoints (base `/api/v1/`)
 
@@ -138,7 +170,7 @@ substitui o dataset do outro. Sem `--clear` eles **acumulam** (não são idempot
 | POST/PATCH/DELETE | `/eventos/` `/eventos/{id}/` | CRUD de eventos |
 | POST | `/eventos/{id}/concluir/` `…/remarcar/` | Transições; `?escopo=ocorrencia\|serie` |
 | GET | `/pendentes` | Eventos rastreáveis com `status_efetivo == PENDENTE` |
-| GET | `/feriados?ano=2026` | Feriados nacionais (BrasilAPI, cacheado) |
+| GET | `/feriados?ano=2026` | Feriados: nacional (BrasilAPI, cacheado) ∪ estadual (`FERIADOS_UF`) ∪ municipal (do perfil) |
 | POST | `/planejamento/calcular` | Preview do plano pelo solver (síncrono, não persiste) |
 | POST | `/planejamento/planejar-ia` | Plano aperfeiçoado pela IA → 202 `{job_id}` (ou 200 se em cache) |
 | GET | `/planejamento/planejar-ia/estimativa` | Tempo estimado da geração, antes de disparar |
@@ -167,9 +199,10 @@ A janela de `/eventos/?inicio&fim` exige datas **tz-aware** (com offset), ex.
 O serviço `mcp` do compose expõe as ferramentas do backend via
 **Model Context Protocol** (transporte streamable-http) em
 `http://localhost:8765/mcp` — camada fina sobre a API, zero lógica própria.
-Ferramentas: `criar_tarefa`, `listar_classes`, `listar_pendentes`,
-`simular_plano` (what-if, não persiste), `gerar_cenarios` (encapsula o
-polling), `escolher_cenario`, `replanejar` (simular/aplicar) e `remarcar`.
+Ferramentas (12): `criar_tarefa`, `listar_classes`, `listar_tarefas`,
+`listar_pendentes`, `consultar_agenda`, `concluir`, `remarcar`, `simular_plano`
+(what-if, não persiste), `gerar_cenarios` (encapsula o polling),
+`refinar_cenario`, `escolher_cenario` e `replanejar` (simular/aplicar).
 
 Qualquer cliente MCP serve como runtime do agente. Exemplo com Claude Code:
 

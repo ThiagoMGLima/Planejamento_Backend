@@ -130,6 +130,13 @@ Três consequências que pegam de surpresa:
 - Os **related managers reversos** herdam a guarda: `tarefa.eventos.all()` também
   levanta. Use `Evento.objects.do_dono(...).filter(origem_tarefa=tarefa)`.
 - `create()` é livre: quem barra escrita sem dono é o `NOT NULL` do banco.
+- **`objects.raw()` é bloqueado** (SQL cru devolve um `RawQuerySet`, que não passa
+  pela guarda). A saída explícita é `Model._base_manager.raw(...)`.
+
+Auditado empiricamente: `values`, `values_list`, `aggregate`, `first`, `latest`,
+`in_bulk`, `iterator`, `contains`, `dates`, `none()`, `len()`/`bool()` e
+`get_or_create` caem todos na guarda. `connection.cursor()` continua fora do
+alcance de qualquer manager — é o limite da técnica, não um esquecimento.
 
 A identidade é **parâmetro do domínio, nunca ambiente**: os services recebem
 `dono` como argumento obrigatório (nada de `contextvar` — no worker Celery ele

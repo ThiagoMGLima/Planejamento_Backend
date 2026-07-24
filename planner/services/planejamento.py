@@ -488,7 +488,13 @@ class ResultadoPlano:
     # De quem é este plano. Carregar o dono aqui evita que cada consumidor a
     # jusante (contexto da IA, cenários, refino) tenha de recebê-lo por fora e
     # arrisque passar o de outro perfil.
-    dono: object = None
+    #
+    # **Sem default, de propósito.** Com `= None` o plano nasceria sem dono sem
+    # ninguém reclamar, e o erro só apareceria lá adiante, em
+    # `adaptacao.fator_classe(None, ...)`, como um `AttributeError` sem relação
+    # aparente com a causa. É a mesma armadilha do `contextvar` que o desenho
+    # deste PR recusou: identidade opcional falha em silêncio.
+    dono: object
 
 
 def validar_tarefas(dono, tarefa_ids):

@@ -107,7 +107,13 @@ def _resultado(tarefas, agora=SEG, horizonte=None, prefs_entrada=None):
     prefs, usadas = P.montar_preferencias(prefs_entrada or {})
     horizonte = horizonte or max(t.deadline for t in tarefas)
     sessoes, nao = P.calcular_plano(tarefas, [], prefs, agora, horizonte)
-    return P.ResultadoPlano(sessoes, nao, prefs, usadas, tarefas, [], agora, horizonte)
+    # `dono=None` explícito: estes testes exercitam matemática pura (métricas,
+    # normalização), que não toca o banco. O ResultadoPlano exige o dono para
+    # que um plano de verdade nunca nasça sem ele — aqui o None é a declaração
+    # de que não há plano de verdade nenhum.
+    return P.ResultadoPlano(
+        sessoes, nao, prefs, usadas, tarefas, [], agora, horizonte, dono=None
+    )
 
 
 def test_metricas_do_plano_valores_grounded():

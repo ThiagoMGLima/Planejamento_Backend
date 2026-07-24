@@ -285,7 +285,10 @@ def test_alertas_do_plano_medio_quando_dia_bloqueado_e_usado():
     prefs = replace(prefs, dias_bloqueados=frozenset({date(2026, 6, 1)}))
     t = P.TarefaEntrada("A", "A", "c1", 60, aware(2026, 6, 1, 22))
     sessoes, nao = P.calcular_plano([t], [], prefs, SEG, t.deadline)
-    res = P.ResultadoPlano(sessoes, nao, prefs, prefs_usadas, [t], [], SEG, t.deadline)
+    # dono=None: `alertas_do_plano` é função pura sobre o plano (ver test_cenarios).
+    res = P.ResultadoPlano(
+        sessoes, nao, prefs, prefs_usadas, [t], [], SEG, t.deadline, dono=None
+    )
     alertas = IA.alertas_do_plano(res)
     assert any(
         a["severidade"] == "medio" and "bloqueado" in a["mensagem"] for a in alertas

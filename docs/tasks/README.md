@@ -35,7 +35,7 @@ Enquanto isso não destrava, a task de encaixe é a **0A.1** (abstração `LLMPr
 
 | Task | Contexto | Resumo |
 | --- | --- | --- |
-| **0B / PR1** — `Perfil`, `dono` e default invertido | [`contexto-0b-pr1.md`](contexto-0b-pr1.md) | `Perfil` + FK `dono` nos 8 models-raiz, unicidade por-dono e um manager que **recusa consulta sem escopo**; 39 testes novos de isolamento com dois perfis |
+| **0B / PR1** — `Perfil`, `dono` e default invertido | [`contexto-0b-pr1.md`](contexto-0b-pr1.md) | `Perfil` + FK `dono` nos 8 models-raiz, unicidade por-dono e um manager que **recusa consulta sem escopo**; 41 testes novos de isolamento com dois perfis |
 | **0B / PR0** — views finas + agente em processo | [`contexto-0b-pr0.md`](contexto-0b-pr0.md) | Regra saiu das views para `services/tarefas.py` e `services/agenda.py`; as ferramentas do agente deixaram de falar HTTP com a própria API |
 
 ## Planos e visões anteriores (Fases A e C, já implementadas)
