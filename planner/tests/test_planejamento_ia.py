@@ -249,9 +249,10 @@ def test_validar_dias_bloqueados_horizonte_dedup_e_teto():
 # gerar_melhoria (Ollama mockado)                                             #
 # --------------------------------------------------------------------------- #
 def test_gerar_melhoria_parse_ok():
+    # A costura do Ollama migrou para services/llm (mockada lá agora).
     payload = {"diretrizes": {}, "resumo": "ok", "trade_offs": [], "sugestoes": []}
     fake = {"message": {"content": json.dumps(payload)}}
-    with mock.patch("planner.services.planejamento_ia.ollama.Client") as Cli:
+    with mock.patch("planner.services.llm.ollama.Client") as Cli:
         Cli.return_value.chat.return_value = fake
         out = IA.gerar_melhoria({"x": 1})
     assert out["resumo"] == "ok"
@@ -259,7 +260,7 @@ def test_gerar_melhoria_parse_ok():
 
 def test_gerar_melhoria_erro_vira_indisponivel():
     with mock.patch(
-        "planner.services.planejamento_ia.ollama.Client",
+        "planner.services.llm.ollama.Client",
         side_effect=RuntimeError("down"),
     ):
         with pytest.raises(IA.OllamaIndisponivel):

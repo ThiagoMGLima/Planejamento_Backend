@@ -166,6 +166,15 @@ OLLAMA_MODEL = env("OLLAMA_MODEL", default="qwen2.5:7b-instruct")
 OLLAMA_TIMEOUT = env.int("OLLAMA_TIMEOUT", default=300)
 IA_PLANEJAMENTO_ENABLED = env.bool("IA_PLANEJAMENTO_ENABLED", default=True)
 
+# Provider da forma "chamada única + JSON schema" (planejamento_ia + cenarios), via
+# a abstração de services/llm.py. Separado de AGENTE_PROVIDER de propósito: são formas
+# distintas (1 chamada stateless vs multi-turno com tool use) e necessidades distintas
+# (o planejador roda bem no 7B local; o agente quer modelo forte). Default `ollama`:
+# quem roda local não muda nada. `anthropic` exige ANTHROPIC_API_KEY + LLM_MODEL;
+# `mock` faz a IA virar no-op determinístico (CI/demo sem Ollama).
+LLM_PROVIDER = env("LLM_PROVIDER", default="ollama")  # ollama | anthropic | mock
+LLM_MODEL = env("LLM_MODEL", default="")  # obrigatório quando LLM_PROVIDER=anthropic
+
 # Estimativa de tempo mostrada antes de gerar (endpoint planejar-ia/estimativa).
 # Modelo linear base + por-tarefa: o tempo é dominado pela base (modelo warm no
 # CPU ~53s) e cresce com o nº de tarefas no escopo, não com o horizonte em si.
