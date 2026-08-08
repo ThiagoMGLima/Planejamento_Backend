@@ -23,7 +23,8 @@ ponta, então o PR2 troca essencialmente *uma função*
 (`services/perfis.perfil_do_request`). O roteiro está na seção 8 de
 [`contexto-0b-pr1.md`](contexto-0b-pr1.md).
 
-Enquanto isso não destrava, a task de encaixe é a **0A.1** (abstração `LLMProvider`).
+Task de encaixe já concluída enquanto isso: **0A.1** (`LLMProvider`) — ver Concluídas
+abaixo.
 
 > **Arquitetura do beta — reconfirmada em 24/07/2026.** Cogitou-se pôr também os
 > **dados** no Supabase; foi avaliado e recusado. Segue valendo: **Supabase só para
@@ -35,6 +36,7 @@ Enquanto isso não destrava, a task de encaixe é a **0A.1** (abstração `LLMPr
 
 | Task | Contexto | Resumo |
 | --- | --- | --- |
+| **0A.1** — abstração `LLMProvider` | [`contexto-0a1-llmprovider.md`](contexto-0a1-llmprovider.md) · [plano](fase0a1-llmprovider.md) | os 3 pontos com `ollama.Client` direto passaram a `services/llm.py` (Ollama/Anthropic/Mock por `LLM_PROVIDER`); sem mudança de contrato |
 | **0B / PR1** — `Perfil`, `dono` e default invertido | [`contexto-0b-pr1.md`](contexto-0b-pr1.md) | `Perfil` + FK `dono` nos 8 models-raiz, unicidade por-dono e um manager que **recusa consulta sem escopo**; 41 testes novos de isolamento com dois perfis |
 | **0B / PR0** — views finas + agente em processo | [`contexto-0b-pr0.md`](contexto-0b-pr0.md) | Regra saiu das views para `services/tarefas.py` e `services/agenda.py`; as ferramentas do agente deixaram de falar HTTP com a própria API |
 

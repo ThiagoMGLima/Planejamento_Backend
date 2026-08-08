@@ -18,12 +18,10 @@ import re
 import unicodedata
 from datetime import date, timedelta
 
-import ollama
-from django.conf import settings
 from django.utils import timezone
 
 from .adaptacao import METRICAS  # noqa: F401 — dono das métricas: adaptacao
-from .planejamento_ia import OllamaIndisponivel
+from .llm import LLMIndisponivel, gerar_json  # noqa: F401 — LLMIndisponivel p/ compat
 
 # Nos custos (não-benefício), menor = melhor; a normalização inverte o sinal
 # para que "maior = melhor" valha em todas (pesos comparáveis entre si).
@@ -190,31 +188,27 @@ SCHEMA_CENARIOS = {
 
 
 def gerar_cenarios_ia(contexto):
-    """UMA chamada ao Ollama → lista bruta de candidatos {nome, intencao, diretrizes}.
+    """UMA chamada ao LLM → lista bruta de candidatos {nome, intencao, diretrizes}.
 
-    Mesmo padrão de gerar_melhoria: qualquer falha vira OllamaIndisponivel e o
+    Mesmo padrão de gerar_melhoria: qualquer falha vira LLMIndisponivel e o
     caller degrada para só os arquétipos. temperature 0.
     """
     try:
-        cli = ollama.Client(
-            host=settings.OLLAMA_BASE_URL, timeout=settings.OLLAMA_TIMEOUT
-        )
-        resp = cli.chat(
-            model=settings.OLLAMA_MODEL,
+        bruto = gerar_json(
+            system=SYSTEM_PROMPT_CENARIOS,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT_CENARIOS},
-                {"role": "user", "content": json.dumps(contexto, ensure_ascii=False)},
+                {"role": "user", "content": json.dumps(contexto, ensure_ascii=False)}
             ],
-            format=SCHEMA_CENARIOS,
-            options={"temperature": 0},
+            schema=SCHEMA_CENARIOS,
         )
-        bruto = json.loads(resp["message"]["content"])
         cenarios = bruto.get("cenarios")
         if not isinstance(cenarios, list):
             raise ValueError("resposta sem lista de cenários")
         return cenarios
-    except Exception as e:  # rede, timeout, JSON inválido, shape errado
-        raise OllamaIndisponivel(str(e))
+    except LLMIndisponivel:
+        raise
+    except Exception as e:  # shape errado
+        raise LLMIndisponivel(str(e))
 
 
 # --------------------------------------------------------------------------- #
@@ -272,29 +266,25 @@ def refinar_cenario_ia(contexto, historico, mensagem):
     `contexto` já traz os FATOS + lote atual + cenário em foco; `historico` é a
     conversa anterior deste lote (lista {role, content}), reenviada para o
     modelo manter o fio ("agora também sem o sábado"). Mesmo padrão de
-    degradação dos irmãos: qualquer falha vira OllamaIndisponivel.
+    degradação dos irmãos: qualquer falha vira LLMIndisponivel.
     """
     try:
-        cli = ollama.Client(
-            host=settings.OLLAMA_BASE_URL, timeout=settings.OLLAMA_TIMEOUT
-        )
-        resp = cli.chat(
-            model=settings.OLLAMA_MODEL,
+        bruto = gerar_json(
+            system=SYSTEM_PROMPT_REFINO,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT_REFINO},
                 {"role": "user", "content": json.dumps(contexto, ensure_ascii=False)},
                 *historico,
                 {"role": "user", "content": mensagem},
             ],
-            format=SCHEMA_REFINO,
-            options={"temperature": 0},
+            schema=SCHEMA_REFINO,
         )
-        bruto = json.loads(resp["message"]["content"])
         if not isinstance(bruto, dict):
             raise ValueError("resposta de refino não é um objeto")
         return bruto
-    except Exception as e:  # rede, timeout, JSON inválido, shape errado
-        raise OllamaIndisponivel(str(e))
+    except LLMIndisponivel:
+        raise
+    except Exception as e:  # shape errado
+        raise LLMIndisponivel(str(e))
 
 
 # --------------------------------------------------------------------------- #

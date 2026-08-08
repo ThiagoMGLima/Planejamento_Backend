@@ -95,6 +95,7 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
 | **C — Rotina inteligente** ✅ | cenários com trade-offs + refino conversacional (C1b/C5), replanejar com diff (C2), fatores adaptativos por classe (C3), agente com tool use (C4/C7), estimativa de duração dos jobs (C6), feriados regionais (C8) | `services/cenarios.py`, `services/replanejamento.py`, `services/adaptacao.py`, `services/agente.py`, `services/tempos.py`, `services/holidays.py` |
 | **0B / PR0** ✅ | views finas: a regra saiu de `promover`/`planejar` para services; as ferramentas do agente passaram a chamar os services **em processo** (antes era HTTP contra a própria API) | `services/tarefas.py`, `services/agenda.py` |
 | **0B / PR1** ✅ | `Perfil`, FK `dono` nos 8 models-raiz, unicidade por-dono, **manager que recusa consulta sem escopo**, posse dos jobs assíncronos, seed de classes por perfil | `managers.py`, `services/perfis.py`, migrations `0007`–`0009` |
+| **0A.1** ✅ | abstração `LLMProvider` da forma *1 chamada + JSON schema*: providers Ollama/Anthropic/Mock por `LLM_PROVIDER`; os 3 pontos com `ollama.Client` direto agora chamam `llm.gerar_json` | `services/llm.py`, `services/planejamento_ia.py`, `services/cenarios.py` |
 
 **O que ainda NÃO existe** — não assuma nada disto:
 
@@ -104,12 +105,13 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
 - **Supabase.** Existe só em documentação — zero código, zero dependência.
 - **Conta demo e gate de pagamento** (`pode_usar`) — PR3. Os campos `plano` e
   `trial_ate` do `Perfil` existem, mas nada os lê.
-- **Abstração `LLMProvider`** (0A.1) — `services/agente.py` já tem o padrão para a
-  forma multi-turno, mas 3 pontos ainda instanciam `ollama.Client` direto
-  (`planejamento_ia.py` e `cenarios.py` 2×).
+- ~~**Abstração `LLMProvider`** (0A.1)~~ — ✅ **feito**: `services/llm.py`
+  (`gerar_json`, providers Ollama/Anthropic/Mock por `LLM_PROVIDER`). Os 3 pontos que
+  instanciavam `ollama.Client` direto agora chamam `llm.gerar_json`. `AGENTE_PROVIDER`
+  (agente, multi-turno) segue **separado** de `LLM_PROVIDER` (planejamento, 1 chamada).
 - **Hospedagem.** Roda só local, via compose.
 
-**Suíte:** 277 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
+**Suíte:** 285 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
 — os únicos que provam isolamento, porque usam **dois** perfis; o resto roda com um
 só, onde "global" e "do dono" coincidem.
 

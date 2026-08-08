@@ -47,6 +47,13 @@ Ollama local que aperfeiçoa o plano. Ver abaixo.
 - **C6** — estimativa adaptativa da duração dos jobs de IA.
 - **C8** — feriados regionais (estadual por UF, offline + municipal manual).
 
+**Fase 0A — Provider trocável + empacotamento** (encaixe entre PRs da 0B):
+
+- **0A.1** ✅ abstração `LLMProvider` (`services/llm.py`): Ollama/Anthropic/Mock por
+  `LLM_PROVIDER`.
+- **0A.2 / 0A.3 / 0A.4 / 0A.5** ⏳ empacotamento, instrumentação, launcher e matriz de
+  modelos.
+
 **Fase 0B — Contas** 🔜 em andamento (4 PRs):
 
 - **PR0** ✅ views finas + ferramentas do agente chamando os services em processo.

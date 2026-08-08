@@ -16,15 +16,16 @@ Tudo aqui degrada com segurança: se o Ollama falhar, `gerar_melhoria` levanta
 import json
 from datetime import date
 
-import ollama
 from django.conf import settings
 from django.utils import timezone
 
 from . import adaptacao, planejamento
+from .llm import LLMIndisponivel, gerar_json
 
-
-class OllamaIndisponivel(Exception):
-    """Ollama desligado/timeout/erro de rede ou resposta não-parseável."""
+# `OllamaIndisponivel` migrou para `llm` como `LLMIndisponivel` (provider-neutro).
+# Mantido como alias porque `tasks.py` e testes referenciam
+# `planejamento_ia.OllamaIndisponivel` — é a MESMA classe que `gerar_json` levanta.
+OllamaIndisponivel = LLMIndisponivel
 
 
 # --------------------------------------------------------------------------- #
@@ -193,29 +194,17 @@ SCHEMA_MELHORIA = {
 
 
 def gerar_melhoria(contexto):
-    """Uma chamada ao Ollama. Retorna o dict bruto (ainda a validar).
+    """Uma chamada ao LLM (provider de `LLM_PROVIDER`). Retorna o dict bruto (a validar).
 
-    Qualquer falha (rede, timeout, JSON inválido) vira `OllamaIndisponivel`.
+    Qualquer falha (rede, timeout, JSON inválido) vira `LLMIndisponivel`.
     """
-    try:
-        cli = ollama.Client(
-            host=settings.OLLAMA_BASE_URL, timeout=settings.OLLAMA_TIMEOUT
-        )
-        resp = cli.chat(
-            model=settings.OLLAMA_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(contexto, ensure_ascii=False),
-                },
-            ],
-            format=SCHEMA_MELHORIA,
-            options={"temperature": 0},
-        )
-        return json.loads(resp["message"]["content"])
-    except Exception as e:  # rede, timeout, JSON inválido, etc.
-        raise OllamaIndisponivel(str(e))
+    return gerar_json(
+        system=SYSTEM_PROMPT,
+        messages=[
+            {"role": "user", "content": json.dumps(contexto, ensure_ascii=False)}
+        ],
+        schema=SCHEMA_MELHORIA,
+    )
 
 
 # --------------------------------------------------------------------------- #

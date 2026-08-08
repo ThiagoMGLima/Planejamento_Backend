@@ -90,18 +90,17 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 > PR0 da 0B** e encaixar a 0A entre PRs / enquanto a 0B estiver bloqueada por Supabase.
 
 ### 0A — Provider trocável + empacotamento
-- **0A.1 Abstração `LLMProvider`** em `planejamento_ia.py`: `gerar_diretrizes(contexto)
-  -> Diretrizes`, com `OllamaProvider` / `AnthropicProvider` / `OpenAIProvider` /
-  `MockProvider`, por env (`LLM_PROVIDER=ollama|api|mock`). `validar_diretrizes`
-  (guarda-corpo) segue independente do provider. **Default `ollama`** (nada muda pra
-  quem roda local).
-  > **Mais barato do que parece:** `services/agente.py` (classes `_OllamaProvider` /
-  > `_AnthropicProvider` e a factory `_criar_provider`) **já tem** esse padrão
-  > (`_OllamaProvider`, provider Anthropic, factory por `AGENTE_PROVIDER`) — só que
-  > para a forma *multi-turno com tool use*. Falta estendê-lo à forma *chamada única
-  > com JSON schema forçado*, nos 3 pontos que ainda instanciam `ollama.Client` direto:
-  > `planejamento_ia.py`, `cenarios.py` (2×) — procure por `ollama.Client(`. Considerar
-  > unificar `AGENTE_PROVIDER` e `LLM_PROVIDER` em vez de manter dois envs.
+- **0A.1 Abstração `LLMProvider`** ✅ **feito** — novo `services/llm.py` com
+  `gerar_json(system, messages, schema) -> dict`, providers `_OllamaProvider` /
+  `_AnthropicProvider` / `_MockProvider` e factory por `LLM_PROVIDER`
+  (`ollama|anthropic|mock`, default `ollama`). Os 3 pontos que instanciavam
+  `ollama.Client` direto (`planejamento_ia.gerar_melhoria`, `cenarios.gerar_cenarios_ia`
+  e `refinar_cenario_ia`) passaram a chamar `llm.gerar_json`. `validar_diretrizes`
+  segue independente do provider. Decisões (ver [`contexto-0a1-llmprovider.md`](docs/tasks/contexto-0a1-llmprovider.md)):
+  **2 envs mantidos** (`AGENTE_PROVIDER` × `LLM_PROVIDER` — formas e necessidades
+  distintas); **OpenAI adiado** (YAGNI); `OllamaIndisponivel` vira alias de
+  `LLMIndisponivel`; `LLM_MODEL` obrigatório no path anthropic; **sem mudança de
+  contrato HTTP**.
 - **0A.2 Empacotamento local:** auto-pull do modelo no boot + **profiles do compose**
   (`--profile local` sobe Ollama; `--profile api` não sobe).
 - **0A.3 Instrumentação:** logar tempo de parede real + (modo api) tokens.
@@ -348,7 +347,10 @@ O grosso da fundação já foi no beta (Fase 0B). Aqui fica o que é específico
   admin** (Q3–Q6): decididos em 24/07/2026, no PR1 — PK local + `supabase_id` à parte;
   o perfil local **vira** a conta do usuário no 1º login; `FeriadoLocal` por-dono;
   admin global com `list_filter` por dono. Detalhe em `docs/tasks/contexto-0b-pr1.md`.
-- **Unificar `AGENTE_PROVIDER` e `LLM_PROVIDER`** num só env (0A.1) ou manter separados.
+- ✅ **Unificar `AGENTE_PROVIDER` e `LLM_PROVIDER`** (0A.1): decidido (24/07/2026) —
+  **manter separados**. São formas de propósito diferente (multi-turno stateful vs 1
+  chamada stateless) e necessidades distintas (agente quer modelo forte remoto;
+  planejador roda bem no 7B local); só o vocabulário dos valores foi alinhado.
 - **IA local vs API** — aguarda dado da Fase 0.
 - **Regras de negócio a mudar** — aguarda dogfooding (Fase 1).
 - **Hospedar (Fork A) vs desktop nativo (Fork B)** pros leigos — decidir após o beta.
