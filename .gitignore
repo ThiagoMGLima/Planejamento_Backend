@@ -29,3 +29,6 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# Telemetria das chamadas de IA (0A.3) — JSONL local, nunca versionado
+.telemetria/

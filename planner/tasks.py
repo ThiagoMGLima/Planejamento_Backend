@@ -87,7 +87,7 @@ def planejar_ia_task(
         if not settings.IA_PLANEJAMENTO_ENABLED:
             raise planejamento_ia.OllamaIndisponivel("IA desligada")
         contexto = planejamento_ia.construir_contexto(base)
-        bruto = planejamento_ia.gerar_melhoria(contexto)
+        bruto = planejamento_ia.gerar_melhoria(contexto, dono_id=dono_id)
         diretrizes = planejamento_ia.validar_diretrizes(
             bruto.get("diretrizes", {}), base.tarefas, base.agora, base.horizonte_fim
         )
@@ -175,7 +175,7 @@ def gerar_cenarios_task(
     try:
         if not settings.IA_PLANEJAMENTO_ENABLED:
             raise planejamento_ia.OllamaIndisponivel("IA desligada")
-        candidatos += cenarios.gerar_cenarios_ia(contexto)
+        candidatos += cenarios.gerar_cenarios_ia(contexto, dono_id=dono_id)
     except planejamento_ia.OllamaIndisponivel:
         ia_indisponivel = True
 
@@ -331,7 +331,9 @@ def refinar_cenario_task(self, dono_id, job_id, cenario_id, mensagem):
     try:
         if not settings.IA_PLANEJAMENTO_ENABLED:
             raise planejamento_ia.OllamaIndisponivel("IA desligada")
-        bruto = cenarios.refinar_cenario_ia(contexto, historico, mensagem)
+        bruto = cenarios.refinar_cenario_ia(
+            contexto, historico, mensagem, dono_id=dono_id
+        )
     except planejamento_ia.OllamaIndisponivel:
         refino = {
             "resposta": "",

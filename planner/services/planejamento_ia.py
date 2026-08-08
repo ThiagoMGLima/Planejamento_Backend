@@ -193,10 +193,11 @@ SCHEMA_MELHORIA = {
 }
 
 
-def gerar_melhoria(contexto):
+def gerar_melhoria(contexto, dono_id=None):
     """Uma chamada ao LLM (provider de `LLM_PROVIDER`). Retorna o dict bruto (a validar).
 
     Qualquer falha (rede, timeout, JSON inválido) vira `LLMIndisponivel`.
+    `dono_id` só alimenta a telemetria (0A.3); não entra no prompt.
     """
     return gerar_json(
         system=SYSTEM_PROMPT,
@@ -204,6 +205,8 @@ def gerar_melhoria(contexto):
             {"role": "user", "content": json.dumps(contexto, ensure_ascii=False)}
         ],
         schema=SCHEMA_MELHORIA,
+        familia="planejar_ia",
+        dono_id=dono_id,
     )
 
 

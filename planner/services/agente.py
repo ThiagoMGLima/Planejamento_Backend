@@ -33,6 +33,7 @@ from planner.services import (
     planejamento,
     replanejamento,
     tarefas,
+    telemetria,
 )
 from planner.services.planejamento import HORIZONTES
 
@@ -409,8 +410,10 @@ class _OllamaProvider:
     pedidos de 1–2 ferramentas; a própria visão avisa que agência multi-turno
     profunda pede modelo maior (use AGENTE_PROVIDER=anthropic para isso)."""
 
-    def __init__(self, historico, mensagem):
+    def __init__(self, historico, mensagem, dono_id=None):
         import ollama
+
+        self._dono_id = dono_id
 
         self._cli = ollama.Client(
             host=settings.OLLAMA_BASE_URL, timeout=settings.OLLAMA_TIMEOUT
@@ -433,15 +436,22 @@ class _OllamaProvider:
         ]
 
     def _chamar(self):
-        try:
-            resp = self._cli.chat(
-                model=settings.OLLAMA_MODEL,
-                messages=self._mensagens,
-                tools=self._tools,
-                options={"temperature": 0},
-            )
-        except Exception as e:  # rede, timeout, etc.
-            raise AgenteIndisponivel(str(e))
+        # Uma medição POR CHAMADA, não por turno: o loop de tool use faz até
+        # MAX_ITERACOES idas ao modelo, e é justamente esse custo multiplicado
+        # que a Fase 2 precisa enxergar (0A.3).
+        with telemetria.medir(
+            "agente", "ollama", settings.OLLAMA_MODEL, dono_id=self._dono_id
+        ) as m:
+            try:
+                resp = self._cli.chat(
+                    model=settings.OLLAMA_MODEL,
+                    messages=self._mensagens,
+                    tools=self._tools,
+                    options={"temperature": 0},
+                )
+            except Exception as e:  # rede, timeout, etc.
+                raise AgenteIndisponivel(str(e))
+            m.metadados(**telemetria.de_ollama(resp))
         msg = resp["message"]
         assistente = {"role": "assistant", "content": msg.get("content") or ""}
         if msg.get("tool_calls"):
@@ -475,7 +485,8 @@ class _AnthropicProvider:
     """Cérebro remoto (API da Claude). O que a visão C4 recomenda para agência
     multi-turno com tool use; solver e dados permanecem locais."""
 
-    def __init__(self, historico, mensagem):
+    def __init__(self, historico, mensagem, dono_id=None):
+        self._dono_id = dono_id
         try:
             import anthropic
         except ImportError as e:  # dep opcional (só quando AGENTE_PROVIDER=anthropic)
@@ -495,16 +506,20 @@ class _AnthropicProvider:
         self._mensagens = [*historico, {"role": "user", "content": mensagem}]
 
     def _chamar(self):
-        try:
-            resp = self._cli.messages.create(
-                model=settings.AGENTE_MODEL,
-                max_tokens=1024,
-                system=SYSTEM_PROMPT,
-                messages=self._mensagens,
-                tools=self._tools,
-            )
-        except Exception as e:
-            raise AgenteIndisponivel(str(e))
+        with telemetria.medir(
+            "agente", "anthropic", settings.AGENTE_MODEL, dono_id=self._dono_id
+        ) as m:
+            try:
+                resp = self._cli.messages.create(
+                    model=settings.AGENTE_MODEL,
+                    max_tokens=1024,
+                    system=SYSTEM_PROMPT,
+                    messages=self._mensagens,
+                    tools=self._tools,
+                )
+            except Exception as e:
+                raise AgenteIndisponivel(str(e))
+            m.metadados(**telemetria.de_anthropic(resp))
         # Eco do turno do assistente (blocos nativos: text + tool_use).
         self._mensagens.append({"role": "assistant", "content": resp.content})
         texto, chamadas = "", []
@@ -539,12 +554,12 @@ class _AnthropicProvider:
         return self._chamar()
 
 
-def _criar_provider(historico, mensagem):
+def _criar_provider(historico, mensagem, dono_id=None):
     nome = (settings.AGENTE_PROVIDER or "ollama").lower()
     if nome == "anthropic":
-        return _AnthropicProvider(historico, mensagem)
+        return _AnthropicProvider(historico, mensagem, dono_id)
     if nome == "ollama":
-        return _OllamaProvider(historico, mensagem)
+        return _OllamaProvider(historico, mensagem, dono_id)
     raise AgenteIndisponivel(f"AGENTE_PROVIDER desconhecido: {nome}")
 
 
@@ -597,7 +612,7 @@ def conversar(dono, mensagem, contexto, historico=None):
         + "\n\nPedido do usuário: "
         + mensagem
     )
-    prov = _criar_provider(historico or [], pedido)
+    prov = _criar_provider(historico or [], pedido, dono_id=dono.id)
 
     acoes = []
     turno = prov.gerar()

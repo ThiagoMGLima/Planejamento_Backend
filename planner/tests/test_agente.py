@@ -78,7 +78,7 @@ class FakeProvider:
 
 def _instalar_provider(monkeypatch, turnos):
     prov = FakeProvider(turnos)
-    monkeypatch.setattr(agente, "_criar_provider", lambda hist, msg: prov)
+    monkeypatch.setattr(agente, "_criar_provider", lambda hist, msg, dono_id=None: prov)
     return prov
 
 
@@ -358,7 +358,7 @@ def test_conversar_injeta_classes_nos_fatos(monkeypatch, perfil):
     estudar = classe(perfil, "Estudar")
     pedidos = []
 
-    def fake_criar_provider(historico, pedido):
+    def fake_criar_provider(historico, pedido, dono_id=None):
         pedidos.append(pedido)
         return FakeProvider([agente._Turno(texto="ok", tool_calls=[])])
 
@@ -375,7 +375,7 @@ def test_conversar_injeta_datas_nos_fatos(monkeypatch, perfil):
     7B apontava uma sexta para "segunda que vem")."""
     pedidos = []
 
-    def fake_criar_provider(historico, pedido):
+    def fake_criar_provider(historico, pedido, dono_id=None):
         pedidos.append(pedido)
         return FakeProvider([agente._Turno(texto="ok", tool_calls=[])])
 
@@ -434,7 +434,7 @@ def test_endpoint_chat_fluxo_completo(api, eager, monkeypatch, perfil):
 
 @pytest.mark.django_db
 def test_endpoint_degrada_sem_cerebro(api, eager, monkeypatch, perfil):
-    def _cai(hist, msg):
+    def _cai(hist, msg, dono_id=None):
         raise agente.AgenteIndisponivel("provider fora")
 
     monkeypatch.setattr(agente, "_criar_provider", _cai)
@@ -456,7 +456,7 @@ def test_endpoint_memoria_da_conversa_reenvia_historico(
 ):
     capturado = {}
 
-    def _fake_criar(historico, mensagem):
+    def _fake_criar(historico, mensagem, dono_id=None):
         capturado["historico"] = list(historico)
         return FakeProvider([agente._Turno(texto="ok", tool_calls=[])])
 

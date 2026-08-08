@@ -187,7 +187,7 @@ SCHEMA_CENARIOS = {
 }
 
 
-def gerar_cenarios_ia(contexto):
+def gerar_cenarios_ia(contexto, dono_id=None):
     """UMA chamada ao LLM → lista bruta de candidatos {nome, intencao, diretrizes}.
 
     Mesmo padrão de gerar_melhoria: qualquer falha vira LLMIndisponivel e o
@@ -200,6 +200,8 @@ def gerar_cenarios_ia(contexto):
                 {"role": "user", "content": json.dumps(contexto, ensure_ascii=False)}
             ],
             schema=SCHEMA_CENARIOS,
+            familia="cenarios",
+            dono_id=dono_id,
         )
         cenarios = bruto.get("cenarios")
         if not isinstance(cenarios, list):
@@ -260,7 +262,7 @@ SCHEMA_REFINO = {
 }
 
 
-def refinar_cenario_ia(contexto, historico, mensagem):
+def refinar_cenario_ia(contexto, historico, mensagem, dono_id=None):
     """UMA chamada ao Ollama → {resposta, nome, intencao, diretrizes} bruto.
 
     `contexto` já traz os FATOS + lote atual + cenário em foco; `historico` é a
@@ -277,6 +279,8 @@ def refinar_cenario_ia(contexto, historico, mensagem):
                 {"role": "user", "content": mensagem},
             ],
             schema=SCHEMA_REFINO,
+            familia="refino",
+            dono_id=dono_id,
         )
         if not isinstance(bruto, dict):
             raise ValueError("resposta de refino não é um objeto")

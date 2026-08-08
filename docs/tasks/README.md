@@ -13,6 +13,9 @@ Dois tipos de documento:
 
 ---
 
+> ⚠️ **Antes de tudo: [`HANDOFF.md`](HANDOFF.md)** — configuração local desta máquina, o
+> Supabase já provisionado e as branches ainda não mergeadas no `main`.
+
 ## Task ativa
 
 **Fase 0B / PR2 — Supabase Auth (0B.1/0B.2).**
@@ -23,8 +26,13 @@ ponta, então o PR2 troca essencialmente *uma função*
 (`services/perfis.perfil_do_request`). O roteiro está na seção 8 de
 [`contexto-0b-pr1.md`](contexto-0b-pr1.md).
 
-Task de encaixe já concluída enquanto isso: **0A.1** (`LLMProvider`) — ver Concluídas
-abaixo.
+O **pré-requisito externo já foi cumprido** (08/08/2026): projeto criado, ES256
+confirmado, URLs configuradas e verificação de assinatura testada ponta a ponta —
+ver [`fase0b-pr2-supabase.md`](fase0b-pr2-supabase.md). Falta escrever o plano de
+implementação do código Django.
+
+Tasks de encaixe já concluídas enquanto isso: **0A.1** (`LLMProvider`) e **0A.3**
+(instrumentação) — ver Concluídas abaixo.
 
 > **Arquitetura do beta — reconfirmada em 24/07/2026.** Cogitou-se pôr também os
 > **dados** no Supabase; foi avaliado e recusado. Segue valendo: **Supabase só para
@@ -36,6 +44,7 @@ abaixo.
 
 | Task | Contexto | Resumo |
 | --- | --- | --- |
+| **0A.3** — instrumentação das chamadas de IA | [`contexto-0a3-instrumentacao.md`](contexto-0a3-instrumentacao.md) · [plano](fase0a3-instrumentacao.md) | `services/telemetria.py`: um registro JSONL por chamada (duração, tokens, tok/s, carga separada), nas 4 famílias; nunca grava conteúdo; `LOGGING` passou a existir no settings |
 | **0A.1** — abstração `LLMProvider` | [`contexto-0a1-llmprovider.md`](contexto-0a1-llmprovider.md) · [plano](fase0a1-llmprovider.md) | os 3 pontos com `ollama.Client` direto passaram a `services/llm.py` (Ollama/Anthropic/Mock por `LLM_PROVIDER`); sem mudança de contrato |
 | **0B / PR1** — `Perfil`, `dono` e default invertido | [`contexto-0b-pr1.md`](contexto-0b-pr1.md) | `Perfil` + FK `dono` nos 8 models-raiz, unicidade por-dono e um manager que **recusa consulta sem escopo**; 41 testes novos de isolamento com dois perfis |
 | **0B / PR0** — views finas + agente em processo | [`contexto-0b-pr0.md`](contexto-0b-pr0.md) | Regra saiu das views para `services/tarefas.py` e `services/agenda.py`; as ferramentas do agente deixaram de falar HTTP com a própria API |

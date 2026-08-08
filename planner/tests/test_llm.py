@@ -18,7 +18,7 @@ def test_gerar_json_ollama_parse_ok(settings):
     fake = {"message": {"content": json.dumps({"ok": 1})}}
     with mock.patch("planner.services.llm.ollama.Client") as Cli:
         Cli.return_value.chat.return_value = fake
-        out = llm.gerar_json(system="s", messages=[], schema={})
+        out = llm.gerar_json(system="s", messages=[], schema={}, familia="planejar_ia")
     assert out == {"ok": 1}
 
 
@@ -31,6 +31,7 @@ def test_gerar_json_ollama_monta_system_e_messages(settings):
             system="SYS",
             messages=[{"role": "user", "content": "oi"}],
             schema={"a": 1},
+            familia="planejar_ia",
         )
         _, kwargs = Cli.return_value.chat.call_args
     assert kwargs["messages"][0] == {"role": "system", "content": "SYS"}
@@ -45,13 +46,13 @@ def test_gerar_json_erro_do_cliente_vira_indisponivel(settings):
         "planner.services.llm.ollama.Client", side_effect=RuntimeError("down")
     ):
         with pytest.raises(llm.LLMIndisponivel):
-            llm.gerar_json(system="s", messages=[], schema={})
+            llm.gerar_json(system="s", messages=[], schema={}, familia="planejar_ia")
 
 
 def test_provider_desconhecido_vira_indisponivel(settings):
     settings.LLM_PROVIDER = "gpt-caseiro"
     with pytest.raises(llm.LLMIndisponivel):
-        llm.gerar_json(system="s", messages=[], schema={})
+        llm.gerar_json(system="s", messages=[], schema={}, familia="planejar_ia")
 
 
 def test_mock_provider_devolve_dict_vazio(settings):
@@ -60,6 +61,7 @@ def test_mock_provider_devolve_dict_vazio(settings):
         system="s",
         messages=[{"role": "user", "content": "x"}],
         schema={},
+        familia="planejar_ia",
     )
     assert out == {}
 
@@ -79,7 +81,7 @@ def test_anthropic_sem_pacote_ou_chave_vira_indisponivel(settings):
     settings.LLM_MODEL = "algum-modelo"
     # Sem chave (ou sem o pacote) → LLMIndisponivel, nunca estoura cru.
     with pytest.raises(llm.LLMIndisponivel):
-        llm.gerar_json(system="s", messages=[], schema={})
+        llm.gerar_json(system="s", messages=[], schema={}, familia="planejar_ia")
 
 
 def test_anthropic_sem_llm_model_vira_indisponivel(settings):
@@ -87,4 +89,4 @@ def test_anthropic_sem_llm_model_vira_indisponivel(settings):
     settings.ANTHROPIC_API_KEY = "sk-teste"
     settings.LLM_MODEL = ""
     with pytest.raises(llm.LLMIndisponivel):
-        llm.gerar_json(system="s", messages=[], schema={})
+        llm.gerar_json(system="s", messages=[], schema={}, familia="planejar_ia")
