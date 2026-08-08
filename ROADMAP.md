@@ -119,6 +119,43 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   > plano completo em ~50s em **CPU pura**, com `ia_indisponivel: false`. Foi teste
   > solto — sem a instrumentação da 0A.3 e sem comparação com o 7b — mas é dado real e
   > fica aqui para não se perder.
+- **0A.6 IA remota na LAN + host sempre-ligado** ⏳ — **adiado por falta de hardware
+  em mãos (08/08/2026); retomar quando o desktop e o Raspberry Pi estiverem acessíveis.**
+
+  A ideia é separar **onde a IA pensa** de **onde o app roda**: Ollama no desktop com a
+  **RX 7600** (o `docker-compose.yml` já é escrito para exatamente essa placa —
+  `ollama/ollama:rocm`, `/dev/kfd`, `HSA_OVERRIDE_GFX_VERSION=11.0.0` para o gfx1102; o
+  README registra 7,4 → 47 tok/s na migração para GPU), e o resto da stack (`db`,
+  `redis`, `web`, `celery`, `mcp`) num host **sempre ligado**, com o Raspberry Pi 4 como
+  candidato. Os dois se falam por `OLLAMA_BASE_URL` na LAN.
+
+  **O Pi não serve como host do modelo** — estimativa por banda de memória, não medição:
+  geração de token em modelo quantizado é limitada por banda, e a LPDDR4 do Pi 4
+  (~4–6 GB/s, sem acelerador que o Ollama use) com o `qwen2.5:3b-instruct` Q4 (~1,9 GB)
+  fica na casa de 2 tok/s. O gargalo pior é o *prompt*: o `construir_contexto` manda
+  carga por dia, capacidade livre por deadline e fatores por classe, e prompt processing
+  no Cortex-A72 é lento. Um plano viraria minutos; cenários, que a semente do
+  `services/tempos.py` já estima em ~4× o planejar-ia, viraria dezenas. O 7b não cabe.
+  **Serve como host do app** (Postgres + Redis + Django single-user é carga leve), não do
+  modelo.
+
+  **O que torna o arranjo viável é o princípio 6**, que já está no código: desktop
+  desligado ⇒ `LLMIndisponivel` ⇒ plano base do solver com `ia_indisponivel: true`. O
+  planejamento não fica refém de a outra máquina estar ligada — perde só a camada que
+  suaviza picos.
+
+  **Config validada em 08/08/2026** (confere em `docker compose config --services`): no
+  host do app, um override remove o serviço e as dependências —
+  `ollama: !reset null` mais `depends_on: !override` em `web` e `celery`, deixando só
+  `db`/`redis` saudáveis; no desktop, `OLLAMA_HOST=0.0.0.0:11434` (o default escuta só
+  em `127.0.0.1`) e `OLLAMA_KEEP_ALIVE=-1`.
+
+  **Caveat, pelo princípio 9:** servir o app na LAN **antes do PR2** expõe uma API sem
+  autenticação nenhuma à rede. "Está na minha rede" não é fronteira. Ou esta task espera
+  o PR2, ou entra com restrição de acesso real (Tailscale/WireGuard, ou bind sem
+  publicar a porta). Não misturar as duas coisas por conveniência.
+
+  Rende de brinde o **dado de GPU real** que a Fase 2 espera para decidir IA local vs API.
 
 ### 0B — Contas + autenticação (fundação, puxada pra frente)
 
@@ -264,6 +301,8 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   (Haiku-class / GPT-mini / Gemini Flash) como default quando hospedar.
 - Modelar custo (tokens × preço; por usuário ativo/mês). Manter o local como opção
   "offline/privacidade" via o mesmo `LLMProvider`.
+- O dado de **GPU real** (RX 7600) vem da **0A.6**, adiada por falta de hardware em mãos.
+  Até lá a única medição de IA local é em CPU.
 
 ---
 

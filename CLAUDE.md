@@ -76,6 +76,10 @@ premissa (aqui, "o frontend acompanhou") que ainda não foi confirmada.
 
 ### Onde olhar primeiro (agente sem contexto)
 
+0. **[`docs/tasks/HANDOFF.md`](docs/tasks/HANDOFF.md)** — o que está **fora** deste
+   arquivo: portas/modelo desta máquina, o Supabase já provisionado, as armadilhas que
+   já custaram investigação e **quais branches ainda não foram mergeadas**. Nada disso é
+   dedutível do código.
 1. **"Estado atual"**, logo abaixo — o que já existe, para não reimplementar nem
    supor o que não existe.
 2. `docs/tasks/README.md` — índice das notas, e qual é a task ativa.

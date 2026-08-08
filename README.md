@@ -54,15 +54,18 @@ Ollama local que aperfeiçoa o plano. Ver abaixo.
 - **0A.3** ✅ **telemetria** (`services/telemetria.py`): um registro JSONL por chamada de
   IA — duração, tokens, `tok_s` e carga de modelo separada — nas 4 famílias, inclusive o
   agente. É o dado que a Fase 2 usa para decidir IA local vs API. Nunca grava conteúdo.
-- **0A.2 / 0A.4 / 0A.5** ⏳ empacotamento, launcher e matriz de modelos.
+- **0A.2 / 0A.4 / 0A.5 / 0A.6** ⏳ empacotamento, launcher, matriz de modelos e IA remota
+  na LAN (esta última adiada por hardware).
 
 **Fase 0B — Contas** 🔜 em andamento (4 PRs):
 
 - **PR0** ✅ views finas + ferramentas do agente chamando os services em processo.
 - **PR1** ✅ `Perfil`, FK `dono` nos 8 models-raiz, unicidade por-dono e o manager
   que exige escopo; 41 testes de isolamento com dois perfis.
-- **PR2** 🔜 `SupabaseJWTAuthentication` + provisionamento JIT — **bloqueado**: exige
-  o projeto Supabase criado.
+- **PR2** 🔜 `SupabaseJWTAuthentication` + provisionamento JIT. O **pré-requisito
+  externo já está cumprido** (projeto Supabase criado, ES256, URLs configuradas e
+  verificação de assinatura testada ponta a ponta — ver
+  `docs/tasks/fase0b-pr2-supabase.md`). Falta o plano de implementação e o código.
 - **PR3** ⏳ conta demo + gate de pagamento stub.
 
 **Próximo:** PR2. Contexto em `docs/tasks/README.md`.

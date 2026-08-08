@@ -13,6 +13,9 @@ Dois tipos de documento:
 
 ---
 
+> ⚠️ **Antes de tudo: [`HANDOFF.md`](HANDOFF.md)** — configuração local desta máquina, o
+> Supabase já provisionado e as branches ainda não mergeadas no `main`.
+
 ## Task ativa
 
 **Fase 0B / PR2 — Supabase Auth (0B.1/0B.2).**
@@ -22,6 +25,11 @@ O PR1 deixou este PR estreito de propósito: o backend já é multi-tenant ponta
 ponta, então o PR2 troca essencialmente *uma função*
 (`services/perfis.perfil_do_request`). O roteiro está na seção 8 de
 [`contexto-0b-pr1.md`](contexto-0b-pr1.md).
+
+O **pré-requisito externo já foi cumprido** (08/08/2026): projeto criado, ES256
+confirmado, URLs configuradas e verificação de assinatura testada ponta a ponta —
+ver [`fase0b-pr2-supabase.md`](fase0b-pr2-supabase.md). Falta escrever o plano de
+implementação do código Django.
 
 Tasks de encaixe já concluídas enquanto isso: **0A.1** (`LLMProvider`) e **0A.3**
 (instrumentação) — ver Concluídas abaixo.
