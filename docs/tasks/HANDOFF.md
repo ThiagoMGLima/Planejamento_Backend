@@ -14,13 +14,14 @@ A 0A.1 e a 0A.3 **estão commitadas**, em duas branches empilhadas — ainda **n
 mergeadas no `main`**. Confirme com `git log --oneline main..HEAD` antes de supor que o
 `main` já tem `services/llm.py` ou `services/telemetria.py`.
 
-| Branch | Base | Conteúdo |
-| --- | --- | --- |
-| `claude/0a1-llmprovider` | `main` (`b660ef9`) | **0A.1** — `services/llm.py`, providers Ollama/Anthropic/Mock por `LLM_PROVIDER` |
-| `claude/0a3-instrumentacao` | `claude/0a1-llmprovider` | **0A.3** — `services/telemetria.py` + a instrumentação das 4 famílias, e um commit de docs de estado (este arquivo, o plano do Supabase, a 0A.6) |
+| Branch | PR | Base | Conteúdo |
+| --- | --- | --- | --- |
+| `claude/0a1-llmprovider` | **#24** | `main` (`b660ef9`) | **0A.1** — `services/llm.py`, providers Ollama/Anthropic/Mock por `LLM_PROVIDER` |
+| `claude/0a3-instrumentacao` | **#25** | `claude/0a1-llmprovider` | **0A.3** — `services/telemetria.py` + a instrumentação das 4 famílias, e um commit de docs de estado (este arquivo, o plano do Supabase, a 0A.6) |
 
 **As duas são empilhadas de propósito:** a 0A.3 instrumenta `llm.gerar_json`, então não
-compila sem a 0A.1. Mergear na ordem — 0A.1 primeiro.
+compila sem a 0A.1. Mergear na ordem — **#24 primeiro**; o #25 tem base no #24, e o
+diff dele encolhe sozinho quando o #24 entrar.
 
 As duas tasks foram desenvolvidas juntas, numa árvore só, e **separadas depois**. O
 estado intermediário (0A.1 sem a 0A.3) foi verificado de verdade antes de virar commit:
