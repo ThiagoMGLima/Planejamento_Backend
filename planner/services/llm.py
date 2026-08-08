@@ -22,6 +22,8 @@ import json
 import ollama
 from django.conf import settings
 
+from . import telemetria
+
 
 class LLMIndisponivel(Exception):
     """LLM desligado/timeout/erro de rede/resposta não-parseável, ou provider
@@ -51,7 +53,7 @@ class _OllamaProvider:
             format=schema,
             options={"temperature": 0},
         )
-        return json.loads(resp["message"]["content"])
+        return json.loads(resp["message"]["content"]), telemetria.de_ollama(resp)
 
 
 class _AnthropicProvider:
@@ -92,7 +94,7 @@ class _AnthropicProvider:
         )
         for bloco in resp.content:
             if bloco.type == "tool_use":
-                return dict(bloco.input or {})
+                return dict(bloco.input or {}), telemetria.de_anthropic(resp)
         raise LLMIndisponivel("resposta sem tool_use")
 
 
@@ -103,7 +105,7 @@ class _MockProvider:
     unitários das funções de alto nível."""
 
     def gerar_json(self, *, system, messages, schema):
-        return {}
+        return {}, {}
 
 
 _PROVIDERS = {
@@ -113,26 +115,47 @@ _PROVIDERS = {
 }
 
 
+def _nome_provider():
+    return (settings.LLM_PROVIDER or "ollama").lower()
+
+
 def _criar_provider():
-    nome = (settings.LLM_PROVIDER or "ollama").lower()
+    nome = _nome_provider()
     try:
         return _PROVIDERS[nome]()
     except KeyError:
         raise LLMIndisponivel(f"LLM_PROVIDER desconhecido: {nome}")
 
 
-def gerar_json(*, system, messages, schema):
+def _modelo(nome):
+    """Qual modelo o provider corrente usa — só para o registro de telemetria."""
+    return {
+        "ollama": settings.OLLAMA_MODEL,
+        "anthropic": settings.LLM_MODEL,
+    }.get(nome, nome)
+
+
+def gerar_json(*, system, messages, schema, familia, dono_id=None):
     """UMA chamada ao provider de `LLM_PROVIDER`, JSON forçado pelo `schema`.
 
     `system` é o prompt de sistema; `messages` é a lista de turnos (user/assistant/tool)
     já montada pelo caller; `schema` é o JSON Schema da resposta. Retorna o dict bruto
     (ainda a validar). Qualquer falha → `LLMIndisponivel`.
+
+    `familia` e `dono_id` existem só para a telemetria (0A.3) e são **parâmetros
+    obrigatórios do domínio, não ambiente** — mesma razão pela qual o `dono` não
+    virou `contextvar` na 0B.10: contexto implícito falha em silêncio no worker
+    Celery, e um registro sem família não serve para nada.
     """
-    try:
-        return _criar_provider().gerar_json(
-            system=system, messages=messages, schema=schema
-        )
-    except LLMIndisponivel:
-        raise
-    except Exception as e:  # rede, timeout, JSON inválido, shape errado
-        raise LLMIndisponivel(str(e))
+    nome = _nome_provider()
+    with telemetria.medir(familia, nome, _modelo(nome), dono_id=dono_id) as m:
+        try:
+            dados, meta = _criar_provider().gerar_json(
+                system=system, messages=messages, schema=schema
+            )
+        except LLMIndisponivel:
+            raise
+        except Exception as e:  # rede, timeout, JSON inválido, shape errado
+            raise LLMIndisponivel(str(e))
+        m.metadados(**meta)
+        return dados

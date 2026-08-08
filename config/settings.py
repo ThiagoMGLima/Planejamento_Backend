@@ -195,6 +195,45 @@ ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
 # usa a variável é só o `mcp_server/` — container separado, que a lê do ambiente
 # (definida no serviço `mcp` do docker-compose.yml).
 
+# --- Telemetria das chamadas de IA (Fase 0A.3) ---------------------------
+# Um registro por chamada de IA, em JSONL append-only. É o dado que a Fase 2
+# usa para decidir IA local vs API — e o que a 0A.5 (3b×7b) e a 0A.6 (CPU×GPU)
+# comparam. NÃO confundir com PLANEJAR_TEMPO_* acima nem com services/tempos.py:
+# aqueles estimam o job inteiro para a UI; isto mede a chamada e persiste.
+# Nunca grava conteúdo (prompt/resposta) — ver o docstring de services/telemetria.py.
+TELEMETRIA_ENABLED = env.bool("TELEMETRIA_ENABLED", default=True)
+# Default dentro do repo: o compose monta `.:/app` em web e celery, então o
+# arquivo aparece direto no host, pronto para `jq`. Está no .gitignore.
+TELEMETRIA_JSONL = env(
+    "TELEMETRIA_JSONL", default=str(BASE_DIR / ".telemetria" / "llm.jsonl")
+)
+
+# --- Logging --------------------------------------------------------------
+# Sem este bloco, um `logger.info` de módulo do app não aparece em lugar nenhum:
+# o logger propaga para a raiz, que no default do Django não tem handler (só
+# `django.*` é configurado). Descoberto na 0A.3 — a telemetria loga em INFO.
+# Console legível para acompanhar rodando (decisão Q7); o registro estruturado
+# vai para o JSONL acima, que é o que se agrega depois.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "simples": {
+            "format": "{levelname} {asctime} {name} {message}",
+            "style": "{",
+            "datefmt": "%H:%M:%S",
+        },
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "simples"},
+    },
+    "root": {"handlers": ["console"], "level": "WARNING"},
+    "loggers": {
+        # Só o nosso código em INFO: WARNING na raiz mantém o ruído de libs fora.
+        "planner": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
+}
+
 # --- Feriados regionais (Marco C8) ---------------------------------------
 # UF para a camada estadual de feriados (lib `holidays`, offline). Vazio
 # desliga a camada. Municipal é o model FeriadoLocal (admin). Nota: o Paraná

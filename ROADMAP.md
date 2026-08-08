@@ -103,7 +103,15 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   contrato HTTP**.
 - **0A.2 Empacotamento local:** auto-pull do modelo no boot + **profiles do compose**
   (`--profile local` sobe Ollama; `--profile api` não sobe).
-- **0A.3 Instrumentação:** logar tempo de parede real + (modo api) tokens.
+- **0A.3 Instrumentação** ✅ **feito** (08/08/2026) — `services/telemetria.py`: um
+  registro JSONL por chamada de IA com duração, tokens (entrada/saída), `tok_s` e
+  carga de modelo separada. Cobre as 4 famílias (`planejar_ia`, `cenarios`, `refino`
+  e **`agente`**, que não era medido por nada). Decisões (ver
+  [`contexto-0a3-instrumentacao.md`](docs/tasks/contexto-0a3-instrumentacao.md)):
+  tokens **também no modo local** (o Ollama devolve; sem isso não há tok/s para a
+  0A.5/0A.6, então excede o "(modo api)" que este item dizia); **`tempos.py`
+  intocado** (mede o job, não a chamada); **nada de conteúdo no registro**, nem
+  atrás de flag; sem mudança de contrato HTTP.
 - **0A.4 Launcher cross-platform:** `start.*`/`stop.*` (mac/linux/windows) + README de
   testador. Pré-requisito: Docker (aceitável pra técnico).
 - **0A.5 Teste de tamanho de modelo:** incluir `qwen2.5:3b` na matriz.

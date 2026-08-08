@@ -51,8 +51,10 @@ Ollama local que aperfeiçoa o plano. Ver abaixo.
 
 - **0A.1** ✅ abstração `LLMProvider` (`services/llm.py`): Ollama/Anthropic/Mock por
   `LLM_PROVIDER`.
-- **0A.2 / 0A.3 / 0A.4 / 0A.5** ⏳ empacotamento, instrumentação, launcher e matriz de
-  modelos.
+- **0A.3** ✅ **telemetria** (`services/telemetria.py`): um registro JSONL por chamada de
+  IA — duração, tokens, `tok_s` e carga de modelo separada — nas 4 famílias, inclusive o
+  agente. É o dado que a Fase 2 usa para decidir IA local vs API. Nunca grava conteúdo.
+- **0A.2 / 0A.4 / 0A.5** ⏳ empacotamento, launcher e matriz de modelos.
 
 **Fase 0B — Contas** 🔜 em andamento (4 PRs):
 
@@ -147,6 +149,39 @@ Os dois seeds **não convivem** — `--clear` zera tarefas e eventos, então rod
 substitui o dataset do outro. Sem `--clear` eles **acumulam** (não são idempotentes).
 Ambos aceitam `--dono <email>` e escrevem **num perfil só** (default: o local); o
 `--clear` também respeita esse escopo e nunca toca em dados de outra conta.
+
+## Telemetria das chamadas de IA
+
+Cada chamada de IA vira uma linha em `.telemetria/llm.jsonl` (gitignorado, aparece no
+host porque o compose monta `.:/app`):
+
+```json
+{"familia": "planejar_ia", "provider": "ollama", "modelo": "qwen2.5:3b-instruct",
+ "duracao_s": 2.07, "carga_s": 0.17, "geracao_s": 1.67, "tokens_entrada": 27,
+ "tokens_saida": 26, "tok_s": 15.6, "ok": true, "dono": null, "ts": "..."}
+```
+
+`carga_s` (carga do modelo) sai separado de `geracao_s` de propósito: com o modelo frio
+ela chega a ser 78% do tempo, e somada mediria cold start em vez de modelo. `tok_s` é
+derivado só da geração isolada.
+
+**Nunca grava conteúdo** — nem prompt, nem resposta, nem título de tarefa, nem atrás de
+flag de debug. O contexto enviado à IA carrega a agenda inteira do usuário.
+
+```bash
+tail -f .telemetria/llm.jsonl
+jq -s 'group_by(.provider + "/" + .modelo)[] |
+  {chave: .[0].provider + "/" + .[0].modelo, n: length,
+   tok_s: (map(.tok_s // empty) | add / length),
+   falhas: (map(select(.ok == false)) | length)}' .telemetria/llm.jsonl
+```
+
+Desligar: `TELEMETRIA_ENABLED=0`. Mudar o destino: `TELEMETRIA_JSONL=/caminho/arq.jsonl`.
+O arquivo é escrito como root pelo container — apagar com
+`docker compose exec web rm -rf /app/.telemetria`.
+
+*Não confundir com `services/tempos.py`*, que estima a duração do **job** inteiro para a
+contagem regressiva do front. Aquele é volátil (cache, TTL 30d); este é histórico.
 
 ## Escopo por dono
 
@@ -260,6 +295,9 @@ Agente conversacional: `AGENTE_ENABLED` (1/0), `AGENTE_PROVIDER`
 As ferramentas do agente chamam os services **em processo**, então não há
 `API_BASE_URL` do lado do Django; a variável sobrou só para o servidor MCP, e o
 `docker-compose.yml` já a define no serviço `mcp`.
+
+Telemetria (0A.3): `TELEMETRIA_ENABLED` (1/0), `TELEMETRIA_JSONL` (caminho do arquivo;
+default `.telemetria/llm.jsonl` na raiz do projeto).
 
 Feriados regionais: `FERIADOS_UF` (camada estadual offline via lib `holidays`; vazio
 desliga). Os municipais ficam no admin, em *Feriados locais*.

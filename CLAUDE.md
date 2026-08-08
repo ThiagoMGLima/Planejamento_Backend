@@ -95,6 +95,7 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
 | **C — Rotina inteligente** ✅ | cenários com trade-offs + refino conversacional (C1b/C5), replanejar com diff (C2), fatores adaptativos por classe (C3), agente com tool use (C4/C7), estimativa de duração dos jobs (C6), feriados regionais (C8) | `services/cenarios.py`, `services/replanejamento.py`, `services/adaptacao.py`, `services/agente.py`, `services/tempos.py`, `services/holidays.py` |
 | **0B / PR0** ✅ | views finas: a regra saiu de `promover`/`planejar` para services; as ferramentas do agente passaram a chamar os services **em processo** (antes era HTTP contra a própria API) | `services/tarefas.py`, `services/agenda.py` |
 | **0B / PR1** ✅ | `Perfil`, FK `dono` nos 8 models-raiz, unicidade por-dono, **manager que recusa consulta sem escopo**, posse dos jobs assíncronos, seed de classes por perfil | `managers.py`, `services/perfis.py`, migrations `0007`–`0009` |
+| **0A.3** ✅ | **telemetria** das chamadas de IA: 1 registro JSONL por chamada (duração, tokens, `tok_s`, carga de modelo separada) nas 4 famílias — inclusive o **agente**, antes sem medição nenhuma. Nunca grava conteúdo. `LOGGING` passou a existir no settings. `familia` é parâmetro **obrigatório** de `llm.gerar_json` | `services/telemetria.py`, `config/settings.py` |
 | **0A.1** ✅ | abstração `LLMProvider` da forma *1 chamada + JSON schema*: providers Ollama/Anthropic/Mock por `LLM_PROVIDER`; os 3 pontos com `ollama.Client` direto agora chamam `llm.gerar_json` | `services/llm.py`, `services/planejamento_ia.py`, `services/cenarios.py` |
 
 **O que ainda NÃO existe** — não assuma nada disto:
@@ -111,7 +112,7 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
   (agente, multi-turno) segue **separado** de `LLM_PROVIDER` (planejamento, 1 chamada).
 - **Hospedagem.** Roda só local, via compose.
 
-**Suíte:** 285 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
+**Suíte:** 296 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
 — os únicos que provam isolamento, porque usam **dois** perfis; o resto roda com um
 só, onde "global" e "do dono" coincidem.
 
@@ -277,7 +278,15 @@ toca o banco recebe `dono` como primeiro parâmetro obrigatório**.
   domínio, não DTOs**: assim `services/` não importa `serializers`, e cada consumidor
   monta a própria forma (a view faz o JSON do contrato; o agente, o resumo digerido).
 - `aplicacao.py` — persiste as sessões do plano revisado (`/aplicar`).
-- `tempos.py` — estimativa adaptativa de duração dos jobs de IA (Marco C6).
+- `tempos.py` — estimativa adaptativa de duração dos **jobs** de IA (Marco C6). Escalar
+  EWMA no cache, a serviço da contagem regressiva do front. **Não confunda com
+  `telemetria.py`** (abaixo): aquele mede a chamada e persiste; este estima o job e é
+  volátil. Não unifique os dois — ver decisão Q3 em `contexto-0a3-instrumentacao.md`.
+- `telemetria.py` — **registro** das chamadas de IA (0A.3): 1 linha JSONL por chamada com
+  duração, tokens, `tok_s`, carga de modelo separada, `ok`/`erro` e `dono`. É o dado da
+  Fase 2 (IA local vs API) e da 0A.5. Duas regras que não podem regredir: **nunca grava
+  conteúdo** (prompt, resposta, título de tarefa) nem atrás de flag, e **nunca derruba a
+  chamada de IA** — falha ao registrar vira `warning`.
 
 ### Fluxo assíncrono (Celery)
 `planner/tasks.py` tem **4 jobs**: `planejar_ia_task`, `gerar_cenarios_task`,
@@ -328,6 +337,36 @@ Variáveis (ver `.env.example`):
   `ANTHROPIC_API_KEY`. **Não há `API_BASE_URL` no settings** desde o PR0 — só o
   `mcp_server/` usa essa variável, lida do ambiente pelo serviço `mcp` do compose.
 - **Feriados:** `FERIADOS_UF` (camada estadual offline; vazio desliga).
+
+## Telemetria e logging (0A.3)
+
+`llm.gerar_json` exige **`familia`** (`planejar_ia|cenarios|refino|agente`) como
+parâmetro nomeado — não é opcional. Mesma razão pela qual o `dono` não virou
+`contextvar` na 0B.10: **identidade é parâmetro do domínio, nunca ambiente**; contexto
+implícito falharia em silêncio no worker Celery. Se você adicionar um call site novo,
+passe `familia` e, quando houver, `dono_id`.
+
+Onde ler o que foi registrado:
+
+```bash
+tail -f .telemetria/llm.jsonl                       # ao vivo
+jq -s 'group_by(.provider + "/" + .modelo)[] |
+  {chave: .[0].provider + "/" + .[0].modelo, n: length,
+   tok_s: (map(.tok_s // empty) | add / length),
+   falhas: (map(select(.ok == false)) | length)}' .telemetria/llm.jsonl
+```
+
+O arquivo é escrito **como root** pelo container (bind mount `.:/app`); para apagar,
+`docker compose exec web rm -rf /app/.telemetria`. Está no `.gitignore`.
+
+> ⚠️ **`LOGGING` só é aplicado por `django.setup()`.** Testar log com
+> `docker compose exec web python -c "..."` **não** funciona — `python -c` não chama
+> `django.setup()`, então a config do settings nunca entra e o `logger.info` some. Use
+> `manage.py shell -c`. Isso já custou uma investigação; não repita.
+
+> A suíte roda com a telemetria **desligada** (fixture autouse em `tests/conftest.py`).
+> Sem isso os testes escrevem registros sintéticos no JSONL real — e esse arquivo é base
+> de decisão de produto, não log descartável.
 
 ## Servidor MCP
 
