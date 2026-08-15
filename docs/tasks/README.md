@@ -10,9 +10,6 @@ Dois tipos de documento:
 - **Contexto** (`contexto-*.md`) — escrito **depois**, fechando a task: o que foi
   feito, decisões, bugs e o estado em que a próxima começa. Existe porque o contexto
   do agente é zerado entre tasks.
-- **Teste humano** (`teste-humano-*.md`) — o roteiro do passo 7: **só** o que exige um
-  humano (interface, julgamento de produto, texto de IA, decisão sobre dado real).
-  Traz também a lista do que já está coberto por teste, para não refazer.
 
 ---
 
@@ -50,9 +47,6 @@ antes** da prova e mediu o teto do 7b local.
 | **B** — `aplicar_plano` como ferramenta + `a_partir_de` no caminho que persiste | ✅ [contexto](contexto-fase1-prb.md) |
 | **C** — IA lê `descricao` → knobs, `pergunta` no plano, vocabulário | ✅ [contexto](contexto-fase1-prc.md) — mecanismo pronto, mas **ocioso com o 7b local** (ver §4 de lá) |
 | **D** — handoff da conversa forte (JSON único) | ⏳ depende das decisões **D6/D7**, abertas |
-
-**Teste humano dos PRs A–C:** [`teste-humano-fase1.md`](teste-humano-fase1.md) — o que só
-um humano pode julgar, e a lista do que já está provado por teste.
 
 > **Arquitetura do beta — reconfirmada em 24/07/2026.** Cogitou-se pôr também os
 > **dados** no Supabase; foi avaliado e recusado. Segue valendo: **Supabase só para

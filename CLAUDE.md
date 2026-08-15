@@ -49,9 +49,10 @@ comando, inspecionar o container, medir com o modelo de verdade. **Se o agente
 consegue verificar, o agente verifica** — mandar o usuário conferir o que um teste
 provaria é empurrar trabalho.
 
-**Passo 7 — o roteiro de teste humano cobre SÓ o que exige um humano.** Escreva
-`docs/tasks/teste-humano-<task>.md` e resuma no chat. Ele contém apenas o que o
-agente **não** consegue fazer ou julgar:
+**Passo 7 — o roteiro de teste humano cobre SÓ o que exige um humano.** Entregue-o
+**no chat**, direto — nada de arquivo. Só vire `docs/tasks/teste-humano-<task>.md`
+se o roteiro for grande demais para uma mensagem, e nesse caso diga o porquê. Ele
+contém apenas o que o agente **não** consegue fazer ou julgar:
 
 - **interface**: clicar, arrastar, ver se o calendário ficou legível;
 - **julgamento de produto**: "esse plano é vivível?", "faz sentido para a minha

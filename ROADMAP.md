@@ -64,8 +64,8 @@ convenção "1 marco = 1 PR" do `CLAUDE.md`):
 6. **Testes automatizados** — suíte + lint + checagem de migrations verdes (ver
    `CLAUDE.md`). Se a suíte não cobre a mudança por inteiro, **o agente escreve os
    testes que faltam**; nada que possa virar `pytest` volta para o usuário.
-7. **Roteiro de teste humano** em `docs/tasks/teste-humano-<task>.md` — só o que
-   exige um humano: interface, julgamento de produto ("é vivível?"), qualidade
+7. **Roteiro de teste humano — no chat** (arquivo só se for grande demais) — só o
+   que exige um humano: interface, julgamento de produto ("é vivível?"), qualidade
    subjetiva de texto de IA e decisões sobre dado real. Para cada item: o que fazer,
    o que observar e o que seria sinal de problema. Detalhe em `CLAUDE.md`,
    "Passos 6–7".
