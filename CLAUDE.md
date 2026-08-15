@@ -65,6 +65,12 @@ O roteiro deve dizer, para cada item: **o que fazer**, **o que observar** e **o 
 seria sinal de problema**. Não peça ao usuário para "verificar se funciona" — isso é
 teste automatizado mal-feito. Peça para julgar o que só ele pode julgar.
 
+**Roteiro não contém comando que o agente poderia rodar.** Se o item começa com
+"rode este comando e veja o resultado", o agente rodou errado: quem roda é ele, e o
+roteiro traz o **resultado já apurado e digerido**, com a pergunta de julgamento em
+cima. Consultar o banco, medir carga, contar sessões, comparar com o prazo — tudo
+isso é do agente. Ao humano cabe **decidir**, não coletar.
+
 **Junto com o roteiro, relate o que você fez**: o que mudou, como, o que a suíte
 passou a cobrir e o que você já verificou por fora dela (com os números). O usuário
 precisa saber o que já está provado para não repetir.
