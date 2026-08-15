@@ -10,7 +10,7 @@ import re
 from rest_framework import serializers
 
 from .models import Classe, Evento, RegraRecorrencia, Tarefa
-from .services import perfis
+from .services import perfis, tarefas
 from .services.planejamento import HORIZONTES
 
 COR_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -92,48 +92,25 @@ class TarefaSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "status", "criado_em", "atualizado_em"]
 
     def validate(self, attrs):
-        """Coerência dos parâmetros de agendamento.
+        """Coerência dos parâmetros de agendamento — delegada ao service.
 
-        Só o que é contraditório na entrada — nada de regra de negócio. O solver
-        já lida sozinho com "não coube" (vira `nao_alocado`); aqui barramos o que
-        nunca poderia dar certo, para o erro aparecer no PUT e não num plano
-        silenciosamente vazio.
+        A regra mora em `services/tarefas.validar_parametros_agendamento`, e não
+        aqui, porque a API e a ferramenta do agente escrevem os mesmos campos por
+        caminhos diferentes: regra duplicada é regra que diverge.
+
+        Valida o estado **efetivo** (o que já está na instância, coberto pelo que
+        está sendo enviado) — num PATCH parcial, validar só o delta deixaria
+        passar combinação inválida formada com o que já estava lá.
         """
         atual = getattr(self, "instance", None)
-
-        def valor(campo):
-            if campo in attrs:
-                return attrs[campo]
-            return getattr(atual, campo, None)
-
-        ini, fim = valor("janela_inicio"), valor("janela_fim")
-        if (ini is None) != (fim is None):
-            raise serializers.ValidationError(
-                {"janela_inicio": "janela_inicio e janela_fim andam juntas."}
-            )
-        if ini is not None and ini >= fim:
-            raise serializers.ValidationError(
-                {"janela_fim": "janela_fim deve ser maior que janela_inicio."}
-            )
-
-        antes, depois = valor("nao_antes_de"), valor("nao_depois_de")
-        if antes and depois and antes > depois:
-            raise serializers.ValidationError(
-                {"nao_depois_de": "nao_depois_de não pode ser antes de nao_antes_de."}
-            )
-
-        dias = valor("dias_permitidos")
-        if dias is not None:
-            if not dias:
-                raise serializers.ValidationError(
-                    {
-                        "dias_permitidos": "Lista vazia proibiria todos os dias; use null."
-                    }
-                )
-            if any(d > 6 for d in dias):
-                raise serializers.ValidationError(
-                    {"dias_permitidos": "Dias vão de 0 (segunda) a 6 (domingo)."}
-                )
+        efetivo = {
+            campo: (attrs[campo] if campo in attrs else getattr(atual, campo, None))
+            for campo in tarefas.CAMPOS_ATUALIZAVEIS
+        }
+        try:
+            tarefas.validar_parametros_agendamento(efetivo)
+        except tarefas.ParametrosInvalidos as e:
+            raise serializers.ValidationError(e.erros)
         return attrs
 
 

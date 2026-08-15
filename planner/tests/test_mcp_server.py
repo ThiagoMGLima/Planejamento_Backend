@@ -356,3 +356,40 @@ def test_aplicar_plano_propaga_erro_do_calcular():
 
 def test_aplicar_plano_esta_registrada_como_tool():
     assert server.aplicar_plano in server.TOOLS
+
+
+@respx.mock
+def test_atualizar_tarefa_faz_patch_so_com_o_que_mudou():
+    rota = respx.patch(f"{BASE}/tarefas/t1/").mock(
+        return_value=httpx.Response(200, json={"id": "t1", "estrategia": "TARDE"})
+    )
+    out = _run(
+        server.atualizar_tarefa("t1", estrategia="TARDE", nao_depois_de="2026-10-19")
+    )
+    assert out == {"id": "t1", "estrategia": "TARDE"}
+    # Campos omitidos não viajam: nulo é omissão, não apagamento.
+    assert json.loads(rota.calls.last.request.content) == {
+        "estrategia": "TARDE",
+        "nao_depois_de": "2026-10-19",
+    }
+
+
+@respx.mock
+def test_atualizar_tarefa_sem_campos_nao_chama_a_api():
+    rota = respx.patch(f"{BASE}/tarefas/t1/")
+    out = _run(server.atualizar_tarefa("t1"))
+    assert "erro" in out
+    assert not rota.called
+
+
+@respx.mock
+def test_atualizar_tarefa_propaga_400_da_api():
+    respx.patch(f"{BASE}/tarefas/t1/").mock(
+        return_value=httpx.Response(400, json={"janela_fim": ["inválida"]})
+    )
+    out = _run(server.atualizar_tarefa("t1", janela_inicio="18:00", janela_fim="09:00"))
+    assert out["erro"] == 400
+
+
+def test_atualizar_tarefa_esta_registrada_como_tool():
+    assert server.atualizar_tarefa in server.TOOLS

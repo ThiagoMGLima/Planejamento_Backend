@@ -104,6 +104,41 @@ async def listar_tarefas(
     return itens
 
 
+async def atualizar_tarefa(
+    tarefa_id: str,
+    deadline: str | None = None,
+    esforco_min: int | None = None,
+    estrategia: str | None = None,
+    nao_antes_de: str | None = None,
+    nao_depois_de: str | None = None,
+    janela_inicio: str | None = None,
+    janela_fim: str | None = None,
+    dias_permitidos: list[int] | None = None,
+) -> dict:
+    """Altera uma tarefa que JÁ EXISTE (nunca use criar_tarefa para isso).
+
+    estrategia: CEDO | TARDE. nao_antes_de/nao_depois_de: YYYY-MM-DD (para
+    terminar antes do prazo, use nao_depois_de). janela_inicio/janela_fim: HH:MM,
+    andam juntas. dias_permitidos: 0=segunda … 6=domingo. Omita o que não muda."""
+    corpo = {
+        k: v
+        for k, v in (
+            ("deadline", deadline),
+            ("esforco_estimado", esforco_min),
+            ("estrategia", estrategia),
+            ("nao_antes_de", nao_antes_de),
+            ("nao_depois_de", nao_depois_de),
+            ("janela_inicio", janela_inicio),
+            ("janela_fim", janela_fim),
+            ("dias_permitidos", dias_permitidos),
+        )
+        if v is not None
+    }
+    if not corpo:
+        return {"erro": "informe ao menos um campo para alterar"}
+    return await _api("PATCH", f"/tarefas/{tarefa_id}/", json=corpo)
+
+
 async def listar_pendentes() -> list | dict:
     """Eventos rastreáveis já vencidos e não concluídos (status PENDENTE)."""
     return await _api("GET", "/pendentes")
@@ -309,6 +344,7 @@ TOOLS = (
     criar_tarefa,
     listar_classes,
     listar_tarefas,
+    atualizar_tarefa,
     listar_pendentes,
     consultar_agenda,
     concluir,

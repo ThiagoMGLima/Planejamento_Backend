@@ -306,8 +306,9 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   [`fase1-parametros-por-tarefa.md`](docs/tasks/fase1-parametros-por-tarefa.md), gate
   respondido em 15/08/2026. **PR A ✅ feito**
   ([contexto](docs/tasks/contexto-fase1-pra.md)), **PR B ✅**
-  ([contexto](docs/tasks/contexto-fase1-prb.md)) e **PR C ✅**
-  ([contexto](docs/tasks/contexto-fase1-prc.md)); **PR D ⏳** (depende das decisões
+  ([contexto](docs/tasks/contexto-fase1-prb.md)) **PR C ✅**
+  ([contexto](docs/tasks/contexto-fase1-prc.md)) e **PR C2 ✅**
+  ([contexto](docs/tasks/contexto-fase1-prc2.md)); **PR D ⏳** (depende das decisões
   D6/D7, ainda abertas).
 
   > ⚠️ **O PR C entrega mecanismo, não valor ainda.** Medido em 15/08/2026: o

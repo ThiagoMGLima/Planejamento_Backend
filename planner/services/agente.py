@@ -20,7 +20,7 @@ resposta honesta com `ia_indisponivel: true`.
 
 import json
 from collections import namedtuple
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from django.conf import settings
 from django.utils import timezone
@@ -140,6 +140,99 @@ def _criar_tarefa(
     }
 
 
+def _atualizar_tarefa(
+    dono,
+    tarefa_id,
+    deadline=None,
+    esforco_min=None,
+    estrategia=None,
+    nao_antes_de=None,
+    nao_depois_de=None,
+    janela_inicio=None,
+    janela_fim=None,
+    dias_permitidos=None,
+    limpar=None,
+):
+    """Altera uma tarefa que já existe.
+
+    Existe porque faltava: no dogfooding de 15/08/2026, pedir "faça essas duas
+    terminarem na véspera da prova" fez o modelo chamar `criar_tarefa` e
+    **duplicar** as tarefas — a única ferramenta de escrita que ele tinha. Não
+    era limitação do modelo; era ferramenta ausente.
+
+    Só campos de agendamento (ver `tarefas.CAMPOS_ATUALIZAVEIS`): `titulo` e
+    `descricao` ficam de fora porque são texto do usuário, e a descrição virou
+    insumo de planejamento — a IA reescrevê-la seria editar a própria entrada.
+
+    Argumento nulo é **ignorado**, não apagado: o modelo omite o que não quis
+    mexer, e um `None` acidental não pode zerar restrição alheia. Para limpar de
+    verdade existe `limpar`, uma lista explícita de nomes de campo.
+    """
+    campos = {
+        "deadline": _normalizar_deadline(deadline) if deadline else None,
+        "esforco_estimado": esforco_min,
+        "estrategia": estrategia,
+        "nao_antes_de": _data_simples(nao_antes_de),
+        "nao_depois_de": _data_simples(nao_depois_de),
+        "janela_inicio": _hora_simples(janela_inicio),
+        "janela_fim": _hora_simples(janela_fim),
+        "dias_permitidos": dias_permitidos,
+    }
+    if deadline and campos["deadline"] is None:
+        return _erro(400, {"deadline": [f"{deadline!r} não é uma data ISO."]})
+    for campo, cru in (
+        ("nao_antes_de", nao_antes_de),
+        ("nao_depois_de", nao_depois_de),
+        ("janela_inicio", janela_inicio),
+        ("janela_fim", janela_fim),
+    ):
+        if cru and campos[campo] is None:
+            return _erro(400, {campo: [f"{cru!r} não tem o formato esperado."]})
+
+    alterar = {c: v for c, v in campos.items() if v is not None}
+    for campo in limpar or []:
+        if campo not in tarefas.CAMPOS_ATUALIZAVEIS:
+            return _erro(400, {"limpar": [f"{campo!r} não é um campo atualizável."]})
+        alterar[campo] = None
+    if not alterar:
+        return _erro(400, "informe ao menos um campo para alterar.")
+
+    try:
+        tarefa = tarefas.atualizar(dono, tarefa_id, **alterar)
+    except tarefas.TarefaDesconhecida as e:
+        return _erro(404, str(e))
+    except tarefas.ParametrosInvalidos as e:
+        return _erro(400, e.erros)
+    except (ValueError, TypeError) as e:
+        return _erro(400, str(e))
+
+    from . import vocabulario
+
+    # Confirmação em português, escrita pelo CÓDIGO — o modelo só copia. Mesma
+    # razão da tabela de vocabulário do PR C.
+    ajuste = {c: v for c, v in alterar.items() if v is not None}
+    return {
+        "id": str(tarefa.id),
+        "titulo": tarefa.titulo,
+        "alterado": sorted(alterar),
+        "resumo": vocabulario.descrever(
+            {
+                **ajuste,
+                "janela_inicio": (
+                    tarefa.janela_inicio.strftime("%H:%M")
+                    if tarefa.janela_inicio and "janela_inicio" in alterar
+                    else None
+                ),
+                "janela_fim": (
+                    tarefa.janela_fim.strftime("%H:%M")
+                    if tarefa.janela_fim and "janela_fim" in alterar
+                    else None
+                ),
+            }
+        ),
+    }
+
+
 def _listar_pendentes(dono):
     """Pendentes pré-digeridos (mesma razão da agenda: o modelo copia)."""
     return [
@@ -171,6 +264,27 @@ def _normalizar_deadline(valor):
     if dt.utcoffset() and dt.utcoffset().total_seconds() != 0:
         return dt
     return timezone.make_aware(dt.replace(tzinfo=None))
+
+
+def _data_simples(valor):
+    """ "YYYY-MM-DD" → `date`; None/inválido → None (quem chama vira erro)."""
+    if not valor:
+        return None
+    try:
+        return date.fromisoformat(str(valor)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _hora_simples(valor):
+    """ "HH:MM" → `time`; None/inválido → None (quem chama vira erro)."""
+    if not valor:
+        return None
+    try:
+        h, m = str(valor).split(":")[:2]
+        return time(int(h), int(m))
+    except (ValueError, TypeError):
+        return None
 
 
 def _normalizar_janela(valor, eh_fim=False):
@@ -409,6 +523,36 @@ FERRAMENTAS = [
             "required": ["titulo"],
         },
         "executar": _criar_tarefa,
+        "muda_estado": True,
+    },
+    {
+        "nome": "atualizar_tarefa",
+        "descricao": (
+            "Altera uma tarefa que JÁ EXISTE (nunca use criar_tarefa para isso). "
+            "Campos: deadline, esforco_min, estrategia (CEDO|TARDE), "
+            "nao_antes_de e nao_depois_de (YYYY-MM-DD), janela_inicio e "
+            "janela_fim (HH:MM, andam juntas), dias_permitidos (0=segunda … "
+            "6=domingo). Omita o que não vai mudar. Para uma tarefa terminar "
+            "antes do prazo, use nao_depois_de. Para apagar uma restrição, "
+            "passe o nome dela em `limpar`."
+        ),
+        "parametros": {
+            "type": "object",
+            "properties": {
+                "tarefa_id": {"type": "string"},
+                "deadline": {"type": "string"},
+                "esforco_min": {"type": "integer"},
+                "estrategia": {"type": "string"},
+                "nao_antes_de": {"type": "string"},
+                "nao_depois_de": {"type": "string"},
+                "janela_inicio": {"type": "string"},
+                "janela_fim": {"type": "string"},
+                "dias_permitidos": {"type": "array", "items": {"type": "integer"}},
+                "limpar": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["tarefa_id"],
+        },
+        "executar": _atualizar_tarefa,
         "muda_estado": True,
     },
     {

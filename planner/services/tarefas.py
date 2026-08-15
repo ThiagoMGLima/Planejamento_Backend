@@ -29,6 +29,133 @@ class ClasseDesconhecida(ValueError):
     modelo corrigir a chamada no turno seguinte."""
 
 
+class TarefaDesconhecida(ValueError):
+    """Tarefa inexistente — ou de outro perfil, que dá no mesmo por fora.
+
+    A busca é escopada, então a tarefa alheia simplesmente não é encontrada. A
+    resposta não deve permitir distinguir "não existe" de "existe e não é sua".
+    """
+
+
+class ParametrosInvalidos(ValueError):
+    """Parâmetros de agendamento incoerentes. `erros` já no shape de 400 da API."""
+
+    def __init__(self, erros):
+        super().__init__(str(erros))
+        self.erros = erros
+
+
+def validar_parametros_agendamento(valores):
+    """Coerência dos parâmetros de agendamento (Fase 1.1). Levanta ou volta calado.
+
+    **Fonte única.** Mora aqui, e não no serializer, porque a API e a ferramenta
+    do agente escrevem os mesmos campos por caminhos diferentes; regra duplicada
+    é regra que diverge. O serializer chama esta função (a direção da dependência
+    já é essa — `serializers` importa de `services`, nunca o contrário).
+
+    Valida só o que é **contraditório na entrada**. "Não coube" não é erro: o
+    solver resolve em `nao_alocado`. O que barramos é o que nunca poderia dar
+    certo, para o erro aparecer na escrita e não num plano silenciosamente vazio.
+
+    `valores` deve trazer o estado **efetivo** de cada campo (o que já está na
+    tarefa, sobrescrito pelo que está sendo alterado) — validar só o delta
+    deixaria passar uma combinação inválida formada com o que já estava lá.
+    """
+    ini, fim = valores.get("janela_inicio"), valores.get("janela_fim")
+    if (ini is None) != (fim is None):
+        raise ParametrosInvalidos(
+            {"janela_inicio": ["janela_inicio e janela_fim andam juntas."]}
+        )
+    if ini is not None and ini >= fim:
+        raise ParametrosInvalidos(
+            {"janela_fim": ["janela_fim deve ser maior que janela_inicio."]}
+        )
+
+    antes, depois = valores.get("nao_antes_de"), valores.get("nao_depois_de")
+    if antes and depois and antes > depois:
+        raise ParametrosInvalidos(
+            {"nao_depois_de": ["nao_depois_de não pode ser antes de nao_antes_de."]}
+        )
+
+    dias = valores.get("dias_permitidos")
+    if dias is not None:
+        if not dias:
+            raise ParametrosInvalidos(
+                {"dias_permitidos": ["Lista vazia proibiria todos os dias; use null."]}
+            )
+        if any(d > 6 for d in dias):
+            raise ParametrosInvalidos(
+                {"dias_permitidos": ["Dias vão de 0 (segunda) a 6 (domingo)."]}
+            )
+
+    estrategia = valores.get("estrategia")
+    if estrategia is not None and estrategia not in Tarefa.Estrategia.values:
+        raise ParametrosInvalidos(
+            {
+                "estrategia": [
+                    f"Deve ser {' ou '.join(Tarefa.Estrategia.values)}, ou nulo."
+                ]
+            }
+        )
+
+
+# Campos que `atualizar` aceita. `titulo` e `descricao` ficam DE FORA de
+# propósito: são texto do usuário, e a `descricao` virou entrada de planejamento
+# (PR C) — deixar a IA reescrevê-los seria ela editar o próprio insumo, sem que
+# ninguém percebesse. Quem muda esses dois é o usuário, pela API.
+CAMPOS_ATUALIZAVEIS = (
+    "deadline",
+    "esforco_estimado",
+    "estrategia",
+    "nao_antes_de",
+    "nao_depois_de",
+    "janela_inicio",
+    "janela_fim",
+    "dias_permitidos",
+)
+
+
+def atualizar(dono, tarefa_id, **campos):
+    """Altera campos de agendamento de uma tarefa existente, no escopo do dono.
+
+    Existe porque o agente não tinha como EDITAR: pedido de "faça esta tarefa
+    terminar na véspera" virava `criar_tarefa`, e o modelo duplicava a tarefa em
+    vez de ajustá-la (visto no dogfooding de 15/08/2026). Não era limitação do
+    modelo — era ferramenta faltando.
+
+    Campo ausente do kwargs fica como está; passar `None` **limpa** o campo (é
+    como se desfaz uma restrição). Só `CAMPOS_ATUALIZAVEIS` são aceitos.
+    """
+    try:
+        tarefa = Tarefa.objects.do_dono(dono).get(pk=tarefa_id)
+    except (Tarefa.DoesNotExist, DjangoValidationError):
+        # ValidationError: `pk=` com algo que nem é UUID (o 7B manda título).
+        raise TarefaDesconhecida(f"Tarefa {tarefa_id!r} não existe.")
+
+    desconhecidos = sorted(set(campos) - set(CAMPOS_ATUALIZAVEIS))
+    if desconhecidos:
+        raise ParametrosInvalidos(
+            {c: ["Campo não atualizável por aqui."] for c in desconhecidos}
+        )
+
+    if "esforco_estimado" in campos:
+        esforco = campos["esforco_estimado"]
+        if esforco is not None and int(esforco) < 1:
+            raise ParametrosInvalidos(
+                {"esforco_estimado": ["Deve ser um inteiro ≥ 1."]}
+            )
+
+    # Estado EFETIVO: o que já existe, coberto pelo que está mudando.
+    efetivo = {c: getattr(tarefa, c) for c in CAMPOS_ATUALIZAVEIS}
+    efetivo.update(campos)
+    validar_parametros_agendamento(efetivo)
+
+    for campo, valor in campos.items():
+        setattr(tarefa, campo, valor)
+    tarefa.save(update_fields=[*campos, "atualizado_em"])
+    return tarefa
+
+
 def criar(
     dono,
     titulo,
