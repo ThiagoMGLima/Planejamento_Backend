@@ -78,6 +78,12 @@ um plano de sessões de produção:
 1. **Solver** (`POST /planejamento/calcular`, síncrono): aloca as tarefas em
    sessões respeitando janelas, tetos diários e eventos já no calendário
    ("ocupado"). O que não couber volta em `nao_alocado`.
+   > ⚠️ O solver aloca sempre **o mais cedo possível** (guloso EDF a partir do
+   > `agora`) — não existe "o mais tarde possível". Para tarefas cujo valor está em
+   > ficar **perto** do prazo (estudar para uma prova), passe `a_partir_de` recuado
+   > o mínimo necessário; sem isso o estudo de uma prova de dezembro cai em agosto.
+   > `buffer_dias` não serve: ele só antecipa. Ver
+   > [`docs/tasks/fase1-parametros-por-tarefa.md`](docs/tasks/fase1-parametros-por-tarefa.md).
 2. **IA** (`POST /planejamento/planejar-ia`, assíncrono via Celery): roda o
    solver, manda os FATOS para o modelo, que devolve **diretrizes** (prioridades,
    buffers, tetos diários por tarefa e total) buscando uma rotina mais **humana**
