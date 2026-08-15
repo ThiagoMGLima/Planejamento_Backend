@@ -44,7 +44,7 @@ antes** da prova e mediu o teto do 7b local.
 | PR | Estado |
 | --- | --- |
 | **A** — campos + `TARDE` no solver + limites duros/suaves | ✅ [contexto](contexto-fase1-pra.md) |
-| **B** — `aplicar_plano` como ferramenta + `a_partir_de` no caminho que persiste | 🔜 |
+| **B** — `aplicar_plano` como ferramenta + `a_partir_de` no caminho que persiste | ✅ [contexto](contexto-fase1-prb.md) |
 | **C** — IA lê `descricao` → knobs, `pergunta` no plano, vocabulário | 🔜 |
 | **D** — handoff da conversa forte (JSON único) | ⏳ depende das decisões **D6/D7**, abertas |
 

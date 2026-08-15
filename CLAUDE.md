@@ -102,6 +102,7 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
 | **0A.3** ✅ | **telemetria** das chamadas de IA: 1 registro JSONL por chamada (duração, tokens, `tok_s`, carga de modelo separada) nas 4 famílias — inclusive o **agente**, antes sem medição nenhuma. Nunca grava conteúdo. `LOGGING` passou a existir no settings. `familia` é parâmetro **obrigatório** de `llm.gerar_json` | `services/telemetria.py`, `config/settings.py` |
 | **0A.1** ✅ | abstração `LLMProvider` da forma *1 chamada + JSON schema*: providers Ollama/Anthropic/Mock por `LLM_PROVIDER`; os 3 pontos com `ollama.Client` direto agora chamam `llm.gerar_json` | `services/llm.py`, `services/planejamento_ia.py`, `services/cenarios.py` |
 | **1.1 / PR A** ✅ | **parâmetros de agendamento por tarefa**: `estrategia` CEDO/**TARDE** (agenda colado no prazo — o solver deixou de só saber "o quanto antes"), pisos/tetos **duros** de data (`nao_antes_de`/`nao_depois_de`, nunca relaxados) e janela/dias **suaves** por-tarefa; comando `marcar_estrategia` | `models.py`, `services/planejamento.py`, `services/replanejamento.py`, `serializers.py` |
+| **1.1 / PR B** ✅ | **`aplicar_plano`**: o par que faltava do `simular_plano` — recalcula com os mesmos argumentos curtos (inclusive `a_partir_de`) e persiste. O plano **não** trafega pelo modelo; segunda chamada não duplica (esbarra em "já promovida"). Espelhado no MCP | `services/agente.py`, `mcp_server/server.py` |
 
 **O que ainda NÃO existe** — não assuma nada disto:
 
@@ -120,14 +121,15 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
   D2), o frontend não os mostra e a IA ainda não os emite. Hoje quem seta é a API, o
   admin ou `manage.py marcar_estrategia`. A IA passa a preencher no **PR C**, e
   `criar_tarefa` (ferramenta do agente) **ainda não aceita** esses knobs.
-- **`aplicar_plano` como ferramenta do agente** e `a_partir_de` no caminho que persiste
-  (`_replanejar` fixa `agora = timezone.now()`). `services/aplicacao.py` existe mas não
-  está exposto. É o **PR B** da Fase 1.1.
 - **Camada de texto livre.** A IA ainda não lê a `descricao` da tarefa para inferir
-  parâmetros, nem devolve `pergunta` no plano. É o **PR C**.
+  parâmetros, nem devolve `pergunta` no plano, e `criar_tarefa` **não aceita** os knobs
+  do PR A — então a IA cria tarefa que nasce sem estratégia. O `SYSTEM_PROMPT` do agente
+  também não tem a regra de linguagem que o prompt do planejador tem
+  (`planejamento_ia.py:147`), e foi por isso que ele já vazou UUID para o usuário. É o
+  **PR C**.
 - **Hospedagem.** Roda só local, via compose.
 
-**Suíte:** 338 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
+**Suíte:** 353 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
 — os únicos que provam isolamento, porque usam **dois** perfis; o resto roda com um
 só, onde "global" e "do dono" coincidem.
 

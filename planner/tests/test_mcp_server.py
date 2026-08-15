@@ -291,3 +291,68 @@ def test_tools_registradas_no_servidor():
     }
     registradas = {t.name for t in _run(server.mcp.list_tools())}
     assert esperadas <= registradas
+
+
+@respx.mock
+def test_aplicar_plano_encadeia_calcular_e_aplicar():
+    """O cliente MCP manda argumentos curtos; a lista de sessões nunca sai daqui."""
+    sessoes = [
+        {
+            "tarefa_id": "t1",
+            "inicio": "2026-10-19T20:00:00-03:00",
+            "fim": "2026-10-19T22:00:00-03:00",
+        }
+    ]
+    calcular = respx.post(f"{BASE}/planejamento/calcular").mock(
+        return_value=httpx.Response(200, json={"sessoes": sessoes, "nao_alocado": []})
+    )
+    aplicar = respx.post(f"{BASE}/planejamento/aplicar").mock(
+        return_value=httpx.Response(201, json=[{"id": "e1"}])
+    )
+
+    out = _run(server.aplicar_plano(["t1"], a_partir_de="2026-10-19"))
+
+    assert out == {"eventos_criados": 1, "nao_alocado": []}
+    assert json.loads(calcular.calls.last.request.content) == {
+        "tarefa_ids": ["t1"],
+        "a_partir_de": "2026-10-19",
+    }
+    # O aplicar recebe as sessões que o calcular devolveu, sem passar pelo modelo.
+    assert json.loads(aplicar.calls.last.request.content) == {"sessoes": sessoes}
+
+
+@respx.mock
+def test_aplicar_plano_com_plano_vazio_nao_chama_aplicar():
+    respx.post(f"{BASE}/planejamento/calcular").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "sessoes": [],
+                "nao_alocado": [{"tarefa_id": "t1", "motivo": "sem espaço"}],
+            },
+        )
+    )
+    rota_aplicar = respx.post(f"{BASE}/planejamento/aplicar")
+
+    out = _run(server.aplicar_plano(["t1"]))
+
+    assert out["erro"] == "plano vazio"
+    assert out["nao_alocado"] == [{"tarefa_id": "t1", "motivo": "sem espaço"}]
+    assert not rota_aplicar.called
+
+
+@respx.mock
+def test_aplicar_plano_propaga_erro_do_calcular():
+    respx.post(f"{BASE}/planejamento/calcular").mock(
+        return_value=httpx.Response(422, json={"tarefas_invalidas": []})
+    )
+    rota_aplicar = respx.post(f"{BASE}/planejamento/aplicar")
+
+    out = _run(server.aplicar_plano(["t1"]))
+
+    assert "erro" in out
+    assert not rota_aplicar.called
+
+
+def test_aplicar_plano_esta_registrada_como_tool():
+    assert server.aplicar_plano in server.TOOLS

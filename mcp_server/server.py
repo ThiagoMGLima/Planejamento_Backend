@@ -153,6 +153,50 @@ async def simular_plano(
     return await _api("POST", "/planejamento/calcular", json=corpo)
 
 
+async def aplicar_plano(
+    tarefa_ids: list[str],
+    preferencias: dict | None = None,
+    horizonte: str | None = None,
+    a_partir_de: str | None = None,
+) -> dict:
+    """GRAVA no calendário o plano das tarefas indicadas. Mesmos parâmetros de
+    simular_plano — use depois de simular e o usuário concordar.
+
+    a_partir_de adia o início da busca: é como um estudo fica colado na prova
+    em vez de ser agendado semanas antes."""
+    corpo = {"tarefa_ids": tarefa_ids}
+    if preferencias:
+        corpo["preferencias"] = preferencias
+    if horizonte:
+        corpo["horizonte"] = horizonte
+    if a_partir_de:
+        corpo["a_partir_de"] = a_partir_de
+
+    # Recalcula e aplica em duas chamadas porque `/planejamento/aplicar` recebe
+    # SESSÕES, não parâmetros. Encadear aqui mantém a lista de sessões dentro do
+    # servidor MCP, longe do modelo — mesma razão de `simular_plano` existir
+    # separado: payload grande atravessando um LLM volta corrompido. O cliente
+    # MCP passa só os argumentos curtos.
+    plano = await _api("POST", "/planejamento/calcular", json=corpo)
+    if "erro" in plano:
+        return plano
+    if not plano.get("sessoes"):
+        return {
+            "erro": "plano vazio",
+            "detalhe": "o solver não achou espaço para nenhuma sessão",
+            "nao_alocado": plano.get("nao_alocado", []),
+        }
+    criados = await _api(
+        "POST", "/planejamento/aplicar", json={"sessoes": plano["sessoes"]}
+    )
+    if isinstance(criados, dict) and "erro" in criados:
+        return criados
+    return {
+        "eventos_criados": len(criados),
+        "nao_alocado": plano.get("nao_alocado", []),
+    }
+
+
 async def _aguardar_job(caminho_status, job_id):
     """Polling de um job assíncrono até pronto/erro/timeout."""
     # Piso no intervalo: garante que `passado` avança (timeout sempre chega).
@@ -259,7 +303,9 @@ async def remarcar(
 
 # Registro explícito (em vez de decorator): mantém os símbolos do módulo como
 # funções puras — os testes de contrato as chamam direto, com o HTTP mockado.
-for _fn in (
+# A tupla é nomeada para o teste poder afirmar que uma tool nova foi de fato
+# registrada: definir a função e esquecer de registrá-la falha em silêncio.
+TOOLS = (
     criar_tarefa,
     listar_classes,
     listar_tarefas,
@@ -267,12 +313,15 @@ for _fn in (
     consultar_agenda,
     concluir,
     simular_plano,
+    aplicar_plano,
     gerar_cenarios,
     refinar_cenario,
     escolher_cenario,
     replanejar,
     remarcar,
-):
+)
+
+for _fn in TOOLS:
     mcp.tool()(_fn)
 
 

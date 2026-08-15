@@ -244,6 +244,93 @@ def _simular_plano(
     return planejamento.serializar_plano(res)
 
 
+def _aplicar_plano(
+    dono, tarefa_ids, preferencias=None, horizonte=None, a_partir_de=None
+):
+    """Recalcula o plano com os MESMOS argumentos da simulação e PERSISTE.
+
+    Fecha o buraco que o dogfooting achou: `simular_plano` aceitava
+    `a_partir_de` e não gravava; `replanejar` gravava e não aceitava. Sem esta
+    ferramenta, um plano montado com `a_partir_de` não tinha como virar
+    calendário — nenhum prompt resolveria isso.
+
+    **O plano não volta pelo modelo.** Recebe os mesmos argumentos curtos de
+    `simular_plano` e re-roda o solver aqui dentro, em vez de aceitar uma lista
+    de sessões que o LLM teria de copiar de volta. É a mesma razão de
+    `_consultar_agenda` devolver resumo pronto: payload grande atravessando o 7B
+    volta corrompido. De quebra é o que a view `/replanejar/aplicar` já faz, e
+    pelo mesmo motivo declarado lá — "evita aplicar plano obsoleto".
+
+    A releitura pode divergir do que foi simulado se a agenda mudou no meio; o
+    retorno descreve o que foi REALMENTE criado, nunca o que se pretendia criar.
+
+    Chamar duas vezes não duplica: as tarefas viram PROMOVIDA na primeira, e
+    `validar_tarefas` as recusa na segunda ("tarefa já promovida").
+    """
+    validas, invalidas = planejamento.validar_tarefas(dono, tarefa_ids)
+    if invalidas:
+        return _erro(422, {"tarefas_invalidas": invalidas})
+
+    agora = _normalizar_janela(a_partir_de) if a_partir_de else timezone.now()
+    if agora is None:
+        return _erro(400, "a_partir_de deve ser uma data ISO.")
+
+    res = planejamento.montar_plano(
+        dono,
+        validas,
+        agora,
+        preferencias or {},
+        horizonte_dias=HORIZONTES.get(horizonte) if horizonte else None,
+    )
+    if not res.sessoes:
+        return _erro(
+            422,
+            {
+                "motivo": "o solver não achou espaço para nenhuma sessão",
+                "nao_alocado": [vars(n) for n in res.nao_alocado],
+            },
+        )
+
+    try:
+        criados = aplicacao.aplicar_sessoes(
+            dono, planejamento.serializar_plano(res)["sessoes"]
+        )
+    except aplicacao.AplicacaoInvalida as e:
+        return _erro(400, e.erros)
+
+    # Resumo por tarefa, em horário local e já digerido — o modelo copia em vez
+    # de recalcular (mesma disciplina de `_consultar_agenda`).
+    por_tarefa = {}
+    for s in res.sessoes:
+        info = por_tarefa.setdefault(
+            s.tarefa_id,
+            {
+                "tarefa": s.tarefa_titulo,
+                "sessoes": 0,
+                "minutos": 0,
+                "de": None,
+                "ate": None,
+            },
+        )
+        dia = timezone.localtime(s.inicio).date()
+        info["sessoes"] += 1
+        info["minutos"] += s.dur_min
+        info["de"] = (
+            dia.isoformat() if info["de"] is None else min(info["de"], dia.isoformat())
+        )
+        info["ate"] = (
+            dia.isoformat()
+            if info["ate"] is None
+            else max(info["ate"], dia.isoformat())
+        )
+
+    return {
+        "eventos_criados": len(criados),
+        "aplicado": list(por_tarefa.values()),
+        "nao_alocado": [vars(n) for n in res.nao_alocado],
+    }
+
+
 def _replanejar(dono, dias_bloqueados=None, preferencias=None, aplicar=False):
     """Replaneja do agora em diante. `aplicar=False` só simula (plano + diff)."""
     agora = timezone.now()
@@ -353,6 +440,26 @@ FERRAMENTAS = [
         },
         "executar": _simular_plano,
         "muda_estado": False,
+    },
+    {
+        "nome": "aplicar_plano",
+        "descricao": (
+            "GRAVA no calendário o plano das tarefas indicadas: recalcula com os "
+            "mesmos argumentos de simular_plano e cria os eventos. Use DEPOIS de "
+            "simular e o usuário concordar. Mesmos parâmetros de simular_plano — "
+            "inclusive a_partir_de, que é como um estudo fica colado na prova."
+        ),
+        "parametros": {
+            "type": "object",
+            "properties": {
+                "tarefa_ids": {"type": "array", "items": {"type": "string"}},
+                "horizonte": {"type": "string"},
+                "a_partir_de": {"type": "string"},
+            },
+            "required": ["tarefa_ids"],
+        },
+        "executar": _aplicar_plano,
+        "muda_estado": True,
     },
     {
         "nome": "replanejar",
