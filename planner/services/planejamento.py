@@ -38,17 +38,18 @@ HORIZONTES = {
 
 # Defaults das preferências (handoff §5). Horários como "HH:MM"; minutos como int.
 #
-# `janela_inicio` desceu de 08:00 para 06:00 em 15/08/2026, por dogfooding: com a
-# grade de aulas cheia, 20 das 31 sessões de estudo caíam depois das 20h, porque a
-# única capacidade livre era a noite. As ~2h antes da primeira aula (08:00/08:20)
-# dão de onde diluir.
+# `janela_inicio` **continua em 08:00**. Em 15/08/2026 desceu para 06:00 tentando
+# resolver o excesso de sessões noturnas, e foi revertida: quem causava as noites
+# era a ordem de varredura da estratégia TARDE (ver `_ordem_de_varredura`), não a
+# falta de manhã. Corrigida a ordem, qualquer janela dá zero sessão noturna — e
+# 06:00 só trocava "menos sessões" por "estudar de madrugada".
 #
 # É default GLOBAL, não preferência por usuário: não há armazenamento de preferência
 # no `Perfil`, e o frontend nunca envia `preferencias` (só mandaria "quando há algo a
 # sobrescrever", e nada popula isso). Quando o perfil guardar preferências, esta
 # linha vira fallback.
 DEFAULTS = {
-    "janela_inicio": "06:00",
+    "janela_inicio": "08:00",
     "janela_fim": "22:00",
     "evitar_fds": True,
     "max_min_por_dia_por_tarefa": 120,

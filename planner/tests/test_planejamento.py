@@ -122,13 +122,12 @@ def test_evita_fim_de_semana_quando_cabe_em_dias_uteis():
 
 def test_relaxa_para_fim_de_semana_quando_nao_cabe():
     prefs, _ = P.montar_preferencias({})
-    # Sexta 05/06 08:00 → deadline seg 08/06 08:00. Com teto de 120/dia sobram
-    # 120 na sexta e 120 na manhã de segunda (janela desde 06:00): 360 min só
-    # fecham se o relaxamento liberar o fim de semana.
+    # Sexta 05/06 08:00 → deadline seg 08/06 08:00. 240 min não cabem só na
+    # sexta (teto 120/dia), então o relaxamento usa o fim de semana.
     sexta = aware(2026, 6, 5, 8)
-    t = _tarefa("A", 360, aware(2026, 6, 8, 8))
+    t = _tarefa("A", 240, aware(2026, 6, 8, 8))
     sessoes, nao = P.calcular_plano([t], [], prefs, sexta, t.deadline)
-    assert _total(sessoes, "A") == 360
+    assert _total(sessoes, "A") == 240
     assert any(s.inicio.weekday() >= 5 for s in sessoes)
 
 

@@ -119,12 +119,11 @@ def _resultado(tarefas, agora=SEG, horizonte=None, prefs_entrada=None):
 def test_metricas_do_plano_valores_grounded():
     t = P.TarefaEntrada("A", "A", "c1", 240, aware(2026, 6, 5, 18))
     m = C.metricas_do_plano(_resultado([t]))
-    # 120/dia → seg 06–08 e ter 06–08 (janela desde 06:00); qua/qui/sex livres;
-    # sem fds no horizonte.
+    # 120/dia → seg 08–10 e ter 08–10; qua/qui/sex livres; sem fds no horizonte.
     assert m["pico_min_dia"] == 120
     assert m["dias_livres"] == 3
     assert m["fds_livres"] == 0
-    assert m["folga_media_h"] == 82.0  # ter 08:00 → sex 18:00
+    assert m["folga_media_h"] == 80.0  # ter 10:00 → sex 18:00
     assert m["min_fora_janela"] == 0
     assert m["fragmentacao"] == 2.0
     assert m["nao_alocado_min"] == 0

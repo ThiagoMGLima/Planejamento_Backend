@@ -71,8 +71,9 @@ def test_tarde_escolhe_o_dia_mas_nao_o_horario():
     """
     prefs, _ = P.montar_preferencias({})
     deadline = aware(2026, 6, 5, 22)
-    # Sexta com manhã (06–08) e noite (20–22) livres; o resto ocupado.
-    ocupado = [(aware(2026, 6, 5, 8), aware(2026, 6, 5, 20))]
+    # Sexta com manhã (08–10) e noite (20–22) livres dentro da janela padrão;
+    # o miolo do dia ocupado. As duas pontas cabem — a escolha é da estratégia.
+    ocupado = [(aware(2026, 6, 5, 10), aware(2026, 6, 5, 20))]
     t = _tarefa("A", 120, deadline, estrategia=P.TARDE)
     sessoes, _ = P.calcular_plano([t], ocupado, prefs, SEG, deadline)
 
