@@ -533,3 +533,43 @@ def test_comando_exige_filtro(perfil):
 
     with pytest.raises(CommandError):
         call_command("marcar_estrategia", "--estrategia", "TARDE", stdout=StringIO())
+
+
+# --------------------------------------------------------------------------- #
+# TARDE além do horizonte (achado do teste sobre dados reais, 15/08/2026)      #
+# --------------------------------------------------------------------------- #
+def test_tarde_com_prazo_alem_do_horizonte_nao_agenda():
+    """Ancorar no fim do horizonte reproduziria o bug que TARDE resolve.
+
+    Caso real: horizonte até 15/11 e prova em 10/12 punham o estudo em 09/11.
+    """
+    prefs, _ = P.montar_preferencias({})
+    horizonte = aware(2026, 6, 15, 22)
+    t = _tarefa("A", 120, aware(2026, 7, 20, 18), estrategia=P.TARDE)  # muito depois
+    sessoes, nao = P.calcular_plano([t], [], prefs, SEG, horizonte)
+
+    assert sessoes == []
+    assert len(nao) == 1
+    assert "horizonte" in nao[0].motivo
+    assert nao[0].minutos_restantes == 120
+
+
+def test_cedo_com_prazo_alem_do_horizonte_continua_agendando():
+    """A guarda é só da TARDE: para CEDO, começar já é exatamente o desejado."""
+    prefs, _ = P.montar_preferencias({})
+    horizonte = aware(2026, 6, 15, 22)
+    t = _tarefa("A", 120, aware(2026, 7, 20, 18))
+    sessoes, nao = P.calcular_plano([t], [], prefs, SEG, horizonte)
+
+    assert sessoes
+    assert nao == []
+
+
+def test_tarde_com_prazo_dentro_do_horizonte_nao_e_afetada():
+    prefs, _ = P.montar_preferencias({})
+    deadline = aware(2026, 6, 12, 18)
+    t = _tarefa("A", 120, deadline, estrategia=P.TARDE)
+    sessoes, nao = P.calcular_plano([t], [], prefs, SEG, aware(2026, 6, 30, 22))
+
+    assert nao == []
+    assert max(s.fim for s in sessoes) == deadline

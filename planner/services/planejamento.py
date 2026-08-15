@@ -497,6 +497,30 @@ def calcular_plano(tarefas, ocupado, prefs, agora, horizonte_fim):
             continue
 
         restante = tarefa.esforco
+
+        # TARDE + prazo além do horizonte: NÃO agenda agora.
+        #
+        # Sem isto, a tarefa ancora no fim do HORIZONTE em vez de no prazo — e o
+        # resultado reproduz o bug que a estratégia existe para resolver. Medido
+        # nos dados reais em 15/08/2026: com horizonte de 92 dias (teto 15/11),
+        # o estudo de uma prova de 10/12 caía em 09/11, um mês antes.
+        #
+        # "O mais tarde possível" e "o mais tarde que este horizonte alcança" não
+        # são a mesma coisa, e entregar a segunda calada é pior que não entregar:
+        # o usuário veria sessões plausíveis na data errada. Cai em `nao_alocado`
+        # com motivo próprio, e entra sozinha no plano quando o prazo se
+        # aproximar. CEDO não passa por aqui — para ela, cedo é o que se quer.
+        if tarefa.estrategia == TARDE and deadline_efetiva > horizonte_fim:
+            nao_alocado.append(
+                NaoAlocado(
+                    tarefa.id,
+                    tarefa.titulo,
+                    restante,
+                    "prazo além do horizonte do plano; será agendada mais perto da data",
+                )
+            )
+            continue
+
         inicio_busca, fim_busca = _limites_duros(
             tarefa, agora, deadline_efetiva, horizonte_fim, tz
         )

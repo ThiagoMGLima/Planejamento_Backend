@@ -61,19 +61,26 @@ convenção "1 marco = 1 PR" do `CLAUDE.md`):
    **juntos, antes de escrever código**. Nada de implementar sobre premissa não
    confirmada.
 5. **Implementação.**
-6. **Testes do backend** — suíte + lint + checagem de migrations verdes (ver `CLAUDE.md`).
-7. **Documento de contexto** em `docs/tasks/contexto-<task>.md` — o que era para
+6. **Testes automatizados** — suíte + lint + checagem de migrations verdes (ver
+   `CLAUDE.md`). Se a suíte não cobre a mudança por inteiro, **o agente escreve os
+   testes que faltam**; nada que possa virar `pytest` volta para o usuário.
+7. **Roteiro de teste humano** em `docs/tasks/teste-humano-<task>.md` — só o que
+   exige um humano: interface, julgamento de produto ("é vivível?"), qualidade
+   subjetiva de texto de IA e decisões sobre dado real. Para cada item: o que fazer,
+   o que observar e o que seria sinal de problema. Detalhe em `CLAUDE.md`,
+   "Passos 6–7".
+8. **Documento de contexto** em `docs/tasks/contexto-<task>.md` — o que era para
    fazer, o que foi feito, decisões, bugs encontrados e como corrigidos, e o estado
    em que a próxima task começa. **O contexto do agente é zerado entre tasks**, então
    este documento é o único fio. Índice em `docs/tasks/README.md`.
-8. **Prompt de sincronia com o frontend** — o frontend é um repo **vizinho**
+9. **Prompt de sincronia com o frontend** — o frontend é um repo **vizinho**
    (`../../Frontend/Planejamento_Frontend/`) que consome esta API. Produza um prompt,
    para o usuário repassar ao agente do frontend, com as mudanças de contrato de forma
    acionável (ou a confirmação de que não há nenhuma, com o porquê). Detalhe em
-   `CLAUDE.md`, "Passos 8–9".
-9. **PR — gated no frontend.** Só depois que o usuário aplicar as mudanças no
-   frontend, rodar os **testes end-to-end** lá e confirmar que está tudo verde.
-10. Se tudo ok → **próxima task**.
+   `CLAUDE.md`, "Passos 9–10".
+10. **PR — gated no frontend.** Só depois que o usuário aplicar as mudanças no
+    frontend, rodar os **testes end-to-end** lá e confirmar que está tudo verde.
+11. Se tudo ok → **próxima task**.
 
 ---
 

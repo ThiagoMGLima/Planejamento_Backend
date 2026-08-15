@@ -28,32 +28,64 @@ seção "Método de trabalho"):
 
 1. Task (próximo item do ROADMAP) → 2. **Análise do código atual** → 3. **Plano de
 implementação** em `docs/tasks/`, com as dúvidas explícitas → 4. **Revisão do usuário
-+ sanar dúvidas** → 5. Implementação → 6. Testes do backend → 7. **Documento de
-contexto** da task → 8. **Prompt de sincronia com o frontend** → 9. **PR** (só depois
-do frontend + E2E verdes) → 10. Próxima task.
++ sanar dúvidas** → 5. Implementação → 6. **Testes automatizados** → 7. **Roteiro de
+teste humano** → 8. **Documento de contexto** da task → 9. **Prompt de sincronia com o
+frontend** → 10. **PR** (só depois do frontend + E2E verdes) → 11. Próxima task.
 
 O passo 4 é um **gate**: não escreva código de implementação antes de o plano ser
 revisado e as dúvidas resolvidas. Levante as dúvidas de uma vez, no plano, em vez de
 gotejá-las durante a implementação.
 
-O passo 7 existe porque **o contexto é zerado entre tasks**: cada uma fecha com
+#### Passos 6–7: quem testa o quê
+
+A divisão é rígida e vale para toda task:
+
+**Passo 6 — o agente testa tudo o que consegue testar.** Ao terminar a
+implementação, verifique se a suíte **já cobre a mudança por inteiro**. Se cobrir e
+passar, ótimo — diga isso. Se não cobrir, **escreva os testes**; não devolva ao
+usuário nada que possa virar `pytest`. Além da suíte, exercite o que for verificável
+por código: chamar o service com dado real (em transação com rollback), rodar o
+comando, inspecionar o container, medir com o modelo de verdade. **Se o agente
+consegue verificar, o agente verifica** — mandar o usuário conferir o que um teste
+provaria é empurrar trabalho.
+
+**Passo 7 — o roteiro de teste humano cobre SÓ o que exige um humano.** Escreva
+`docs/tasks/teste-humano-<task>.md` e resuma no chat. Ele contém apenas o que o
+agente **não** consegue fazer ou julgar:
+
+- **interface**: clicar, arrastar, ver se o calendário ficou legível;
+- **julgamento de produto**: "esse plano é vivível?", "faz sentido para a minha
+  rotina?" — correção o teste prova, adequação não;
+- **qualidade subjetiva de texto** gerado por IA em conversa livre;
+- **decisões sobre dado real** que o agente não deve tomar sozinho (aplicar algo
+  irreversível, escolher entre dois comportamentos aceitáveis).
+
+O roteiro deve dizer, para cada item: **o que fazer**, **o que observar** e **o que
+seria sinal de problema**. Não peça ao usuário para "verificar se funciona" — isso é
+teste automatizado mal-feito. Peça para julgar o que só ele pode julgar.
+
+**Junto com o roteiro, relate o que você fez**: o que mudou, como, o que a suíte
+passou a cobrir e o que você já verificou por fora dela (com os números). O usuário
+precisa saber o que já está provado para não repetir.
+
+O passo 8 existe porque **o contexto é zerado entre tasks**: cada uma fecha com
 `docs/tasks/contexto-<task>.md` registrando o que era para fazer, o que foi feito,
 as decisões de desenho, os bugs encontrados e como foram corrigidos, e o estado em
 que a próxima task começa. Índice em `docs/tasks/README.md`.
 
-Ainda no passo 7, atualize **"Estado atual"** logo abaixo e o status no
+Ainda no passo 8, atualize **"Estado atual"** logo abaixo e o status no
 `ROADMAP.md`. São 3 linhas e evitam o pior modo de falha deste projeto: um agente
 sem contexto reimplementando o que já existe, ou supondo que existe o que não
 existe.
 
-#### Passos 8–9: o frontend é o segundo gate do PR
+#### Passos 9–10: o frontend é o terceiro gate do PR
 
 **O backend não vive sozinho.** O frontend é um repo **vizinho**
 (`../../Frontend/Planejamento_Frontend/`, SPA React+Vite) que consome esta API por
 `VITE_API_URL`. Um PR de backend só fecha quando os dois lados estão verdes juntos —
 senão o `main` do backend passa a servir um contrato que o frontend ainda não fala.
 
-**Passo 8 — prompt de sincronia (depois dos testes do backend, nunca antes).**
+**Passo 9 — prompt de sincronia (depois dos testes do backend, nunca antes).**
 Assim que a suíte do backend passar, produza um **prompt para o usuário mandar ao
 agente do frontend**. O prompt deve:
 
@@ -68,7 +100,7 @@ agente do frontend**. O prompt deve:
 O prompt é para o **usuário repassar**, não para o agente do backend executar: o
 agente do backend não toca no repo do frontend.
 
-**Passo 9 — o PR é gated.** **Não abra o PR** logo após os testes do backend. O PR
+**Passo 10 — o PR é gated.** **Não abra o PR** logo após os testes do backend. O PR
 só pode ser aberto **depois** que o usuário aplicar as mudanças no frontend, rodar os
 **testes end-to-end** lá e confirmar que está tudo verde. Até essa confirmação chegar,
 o trabalho fica em espera — mesma disciplina do gate do passo 4: não avance sobre uma
