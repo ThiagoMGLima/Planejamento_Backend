@@ -157,21 +157,24 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
   (`gerar_json`, providers Ollama/Anthropic/Mock por `LLM_PROVIDER`). Os 3 pontos que
   instanciavam `ollama.Client` direto agora chamam `llm.gerar_json`. `AGENTE_PROVIDER`
   (agente, multi-turno) segue **separado** de `LLM_PROVIDER` (planejamento, 1 chamada).
-- **Quem LIGA os parâmetros de agendamento.** Os campos existem e o solver os obedece
-  (PR A, abaixo), mas **nada os preenche sozinho**: não há default de classe (decisão
-  D2), o frontend não os mostra e a IA ainda não os emite. Hoje quem seta é a API, o
-  admin ou `manage.py marcar_estrategia`. A IA passa a preencher no **PR C**, e
-  `criar_tarefa` (ferramenta do agente) **ainda não aceita** esses knobs.
+- **Quem LIGA os parâmetros de agendamento, na prática.** O caminho existe inteiro
+  (API, `criar_tarefa`, `atualizar_tarefa`, tradução da `descricao`), mas **nada os
+  preenche sozinho**: não há default de classe (decisão D2) e o frontend não os
+  mostra. Com o 7b local a IA também não preenche — ver o último item desta lista.
+  Hoje quem seta de fato é a API, o admin ou `manage.py marcar_estrategia`.
 - **Endpoint para RESPONDER uma pergunta.** O plano devolve `perguntas`, mas aceitar
   uma é `PATCH /tarefas/{id}/` com o knob — funciona, não é caminho desenhado.
 - **`preferencias` na ferramenta `replanejar`** do agente. Sem isso, pedido de "abra
   minha janela de estudo" não tem como ser atendido pela conversa. Preferência é
   global e por-chamada — o `Perfil` não guarda nenhuma.
 - **Cenários e refino não conhecem os knobs novos.** `cenarios.py` segue intocado.
-- **Um modelo que use a camada de texto livre.** O mecanismo do PR C está pronto e
-  testado, mas o `qwen2.5:7b` ignora a instrução de traduzir a `descricao` — medido
-  duas vezes em 15/08/2026. Enquanto `LLM_PROVIDER=ollama` com o 7b, a camada fica
-  ociosa (nada quebra: `leitura` reporta `entendi: []`).
+- **Um modelo que USE as ferramentas.** O mecanismo dos PRs C e C2 está pronto e
+  testado, mas o `qwen2.5:7b` não o exercita: ignora a instrução de traduzir a
+  `descricao` (medido 2×) e, pedido para ALTERAR uma tarefa, chama `criar_tarefa`
+  mesmo com `atualizar_tarefa` disponível e a descrição dizendo "nunca use
+  criar_tarefa para isso" (medido 15/08/2026, depois do PR C2). Nada quebra — o
+  guarda-corpo descarta e a `leitura` reporta `entendi: []` — mas a camada
+  conversacional fica ociosa. É o gargalo que a decisão **D6** destrava.
 - **Hospedagem.** Roda só local, via compose.
 
 **Suíte:** 448 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
