@@ -83,12 +83,16 @@ def test_sessoes_substituidas_nao_se_autobloqueiam(perfil):
     # aquele slot for reutilizável (sem a exclusão, cairia na madrugada).
     classe = ClasseFactory()
     for d in range(1, 6):
-        inicio_fixo = 10 if d == 2 else 8
+        # A janela começa 06:00, então o bloqueio precisa começar aí — senão a
+        # manhã livre daria espaço e o teste deixaria de exercitar a exclusão.
+        inicio_fixo = 10 if d == 2 else 6
         EventoFactory(
             classe=classe,
             inicio=aware(2026, 6, d, inicio_fixo),
             fim=aware(2026, 6, d, 22),
         )
+    # Terça: bloqueia 06–08 à parte, deixando exatamente o slot da sessão (08–10).
+    EventoFactory(classe=classe, inicio=aware(2026, 6, 2, 6), fim=aware(2026, 6, 2, 8))
     t = _tarefa_promovida(esforco=120, deadline=aware(2026, 6, 5, 18))
     _sessao(t, aware(2026, 6, 2, 8), aware(2026, 6, 2, 10))
 

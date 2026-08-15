@@ -47,8 +47,10 @@ def _total(sessoes, tarefa_id):
 def test_montar_preferencias_aplica_defaults():
     prefs, usadas = P.montar_preferencias({})
     assert usadas == P.DEFAULTS
-    assert prefs.janela_inicio_min == 8 * 60
-    assert prefs.janela_fim_min == 22 * 60
+    # Derivado do DEFAULTS de propósito: o teste prova a CONVERSÃO "HH:MM"→min,
+    # não decora o horário. Mudar o default não deve exigir editar isto.
+    assert prefs.janela_inicio_min == P._hhmm_para_min(P.DEFAULTS["janela_inicio"])
+    assert prefs.janela_fim_min == P._hhmm_para_min(P.DEFAULTS["janela_fim"])
     assert prefs.max_min_por_dia_por_tarefa == 120
     assert prefs.max_min_por_dia_total is None
 
@@ -82,8 +84,9 @@ def test_sessoes_dentro_da_janela_e_antes_da_deadline():
     prefs, _ = P.montar_preferencias({})
     t = _tarefa("A", 240, SEG + timedelta(days=5))
     sessoes, _ = P.calcular_plano([t], [], prefs, SEG, t.deadline)
+    ini_h = P._hhmm_para_min(P.DEFAULTS["janela_inicio"]) // 60
     for s in sessoes:
-        assert 8 <= s.inicio.hour
+        assert ini_h <= s.inicio.hour
         assert s.fim.hour <= 22 or (s.fim.hour == 22 and s.fim.minute == 0)
         assert s.fim <= t.deadline
 
@@ -119,12 +122,13 @@ def test_evita_fim_de_semana_quando_cabe_em_dias_uteis():
 
 def test_relaxa_para_fim_de_semana_quando_nao_cabe():
     prefs, _ = P.montar_preferencias({})
-    # Sexta 05/06 08:00 → deadline seg 08/06 08:00. 240 min não cabem só na
-    # sexta (teto 120/dia), então o relaxamento usa o fim de semana.
+    # Sexta 05/06 08:00 → deadline seg 08/06 08:00. Com teto de 120/dia sobram
+    # 120 na sexta e 120 na manhã de segunda (janela desde 06:00): 360 min só
+    # fecham se o relaxamento liberar o fim de semana.
     sexta = aware(2026, 6, 5, 8)
-    t = _tarefa("A", 240, aware(2026, 6, 8, 8))
+    t = _tarefa("A", 360, aware(2026, 6, 8, 8))
     sessoes, nao = P.calcular_plano([t], [], prefs, sexta, t.deadline)
-    assert _total(sessoes, "A") == 240
+    assert _total(sessoes, "A") == 360
     assert any(s.inicio.weekday() >= 5 for s in sessoes)
 
 

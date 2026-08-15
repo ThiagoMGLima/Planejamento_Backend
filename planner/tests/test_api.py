@@ -8,6 +8,7 @@ import pytest
 from rest_framework.test import APIClient
 
 from planner.models import Evento, Tarefa
+from planner.services import planejamento as P
 
 from .factories import ClasseFactory, EventoFactory, TarefaFactory, aware
 
@@ -198,7 +199,7 @@ def test_calcular_retorna_plano_e_preferencias_usadas(api):
     assert all(s["tarefa_id"] == str(tarefa.id) for s in body["sessoes"])
     assert all(s["classe_id"] == str(classe.id) for s in body["sessoes"])
     assert body["nao_alocado"] == []
-    assert body["preferencias_usadas"]["janela_inicio"] == "08:00"
+    assert body["preferencias_usadas"]["janela_inicio"] == P.DEFAULTS["janela_inicio"]
 
 
 def test_calcular_tarefa_sem_deadline_retorna_422(api):
