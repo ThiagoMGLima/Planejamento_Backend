@@ -73,6 +73,16 @@ def _pool_e_substituiveis(dono, agora, futuras):
                 classe_id=t.classe_id,
                 esforco_estimado=esforco_futuro[tid],
                 deadline=t.deadline,
+                # Parâmetros de agendamento (Fase 1.1): replanejar tem de manter
+                # o que a tarefa pediu. Sem repassá-los, uma tarefa TARDE voltaria
+                # a ser agendada o quanto antes justamente no replanejamento —
+                # e `montar_plano` os lê sem getattr, então a falta quebraria alto.
+                estrategia=t.estrategia,
+                nao_antes_de=t.nao_antes_de,
+                nao_depois_de=t.nao_depois_de,
+                janela_inicio=t.janela_inicio,
+                janela_fim=t.janela_fim,
+                dias_permitidos=t.dias_permitidos,
             )
         )
 

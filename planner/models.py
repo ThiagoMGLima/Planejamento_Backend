@@ -93,6 +93,10 @@ class Tarefa(TimestampedModel):
         INBOX = "INBOX", "Inbox"
         PROMOVIDA = "PROMOVIDA", "Promovida"
 
+    class Estrategia(models.TextChoices):
+        CEDO = "CEDO", "O quanto antes"
+        TARDE = "TARDE", "O mais perto possível do prazo"
+
     dono = models.ForeignKey(Perfil, on_delete=models.CASCADE, related_name="tarefas")
     titulo = models.CharField(max_length=200)
     descricao = models.TextField(blank=True)
@@ -104,6 +108,32 @@ class Tarefa(TimestampedModel):
     esforco_estimado = models.PositiveIntegerField(null=True, blank=True)  # minutos
     status = models.CharField(
         max_length=10, choices=Status.choices, default=Status.INBOX
+    )
+
+    # --- Parâmetros de agendamento (Fase 1.1) --------------------------------
+    # Ocultos: o usuário não digita nada disto no frontend. Saem na API (D4) para
+    # o agente/MCP alcançarem pelo caminho normal.
+    #
+    # São ORTOGONAIS por decisão de desenho: cada campo expressa UMA condição e
+    # não altera o significado dos outros. Em particular `estrategia=TARDE` NÃO
+    # aciona `buffer_dias` — "terminar na véspera" é `nao_depois_de`.
+    #
+    # NÃO há default herdado de classe (D2): `estrategia` nulo é "nada foi dito",
+    # e o solver trata como CEDO. Ver docs/tasks/fase1-parametros-por-tarefa.md.
+    estrategia = models.CharField(
+        max_length=5, choices=Estrategia.choices, null=True, blank=True
+    )
+    # Piso e teto DUROS de data: a cascata de relaxamento do solver nunca os
+    # afrouxa. Relaxar "não antes de X" seria desfazer o pedido, não degradá-lo —
+    # se não couber, a tarefa cai em `nao_alocado` com motivo.
+    nao_antes_de = models.DateField(null=True, blank=True)
+    nao_depois_de = models.DateField(null=True, blank=True)
+    # Restrições SUAVES: compõem com as preferências globais pelo mais restritivo
+    # e caem no nível ≥ 3 do relaxamento, junto com os overrides de janela.
+    janela_inicio = models.TimeField(null=True, blank=True)
+    janela_fim = models.TimeField(null=True, blank=True)
+    dias_permitidos = ArrayField(  # 0=seg … 6=dom, mesma convenção de RegraRecorrencia
+        models.PositiveSmallIntegerField(), null=True, blank=True
     )
 
     objects = EscopoManager()

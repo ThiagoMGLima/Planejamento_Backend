@@ -101,6 +101,7 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
 | **0B / PR1** ✅ | `Perfil`, FK `dono` nos 8 models-raiz, unicidade por-dono, **manager que recusa consulta sem escopo**, posse dos jobs assíncronos, seed de classes por perfil | `managers.py`, `services/perfis.py`, migrations `0007`–`0009` |
 | **0A.3** ✅ | **telemetria** das chamadas de IA: 1 registro JSONL por chamada (duração, tokens, `tok_s`, carga de modelo separada) nas 4 famílias — inclusive o **agente**, antes sem medição nenhuma. Nunca grava conteúdo. `LOGGING` passou a existir no settings. `familia` é parâmetro **obrigatório** de `llm.gerar_json` | `services/telemetria.py`, `config/settings.py` |
 | **0A.1** ✅ | abstração `LLMProvider` da forma *1 chamada + JSON schema*: providers Ollama/Anthropic/Mock por `LLM_PROVIDER`; os 3 pontos com `ollama.Client` direto agora chamam `llm.gerar_json` | `services/llm.py`, `services/planejamento_ia.py`, `services/cenarios.py` |
+| **1.1 / PR A** ✅ | **parâmetros de agendamento por tarefa**: `estrategia` CEDO/**TARDE** (agenda colado no prazo — o solver deixou de só saber "o quanto antes"), pisos/tetos **duros** de data (`nao_antes_de`/`nao_depois_de`, nunca relaxados) e janela/dias **suaves** por-tarefa; comando `marcar_estrategia` | `models.py`, `services/planejamento.py`, `services/replanejamento.py`, `serializers.py` |
 
 **O que ainda NÃO existe** — não assuma nada disto:
 
@@ -114,9 +115,19 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
   (`gerar_json`, providers Ollama/Anthropic/Mock por `LLM_PROVIDER`). Os 3 pontos que
   instanciavam `ollama.Client` direto agora chamam `llm.gerar_json`. `AGENTE_PROVIDER`
   (agente, multi-turno) segue **separado** de `LLM_PROVIDER` (planejamento, 1 chamada).
+- **Quem LIGA os parâmetros de agendamento.** Os campos existem e o solver os obedece
+  (PR A, abaixo), mas **nada os preenche sozinho**: não há default de classe (decisão
+  D2), o frontend não os mostra e a IA ainda não os emite. Hoje quem seta é a API, o
+  admin ou `manage.py marcar_estrategia`. A IA passa a preencher no **PR C**, e
+  `criar_tarefa` (ferramenta do agente) **ainda não aceita** esses knobs.
+- **`aplicar_plano` como ferramenta do agente** e `a_partir_de` no caminho que persiste
+  (`_replanejar` fixa `agora = timezone.now()`). `services/aplicacao.py` existe mas não
+  está exposto. É o **PR B** da Fase 1.1.
+- **Camada de texto livre.** A IA ainda não lê a `descricao` da tarefa para inferir
+  parâmetros, nem devolve `pergunta` no plano. É o **PR C**.
 - **Hospedagem.** Roda só local, via compose.
 
-**Suíte:** 296 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
+**Suíte:** 338 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
 — os únicos que provam isolamento, porque usam **dois** perfis; o resto roda com um
 só, onde "global" e "do dono" coincidem.
 

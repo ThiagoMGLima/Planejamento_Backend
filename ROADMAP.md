@@ -293,6 +293,31 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 - Como o `dono` já entrou (Fase 0B), mudanças de regra **sobem por cima** do schema
   multi-tenant — retrabalho leve aceito.
 
+### Regras já fechadas pelo uso
+
+- **1.1 Parâmetros de agendamento por tarefa** — plano
+  [`fase1-parametros-por-tarefa.md`](docs/tasks/fase1-parametros-por-tarefa.md), gate
+  respondido em 15/08/2026. **PR A ✅ feito**
+  ([contexto](docs/tasks/contexto-fase1-pra.md)); **PR B/C 🔜**; **PR D ⏳** (depende das
+  decisões D6/D7, ainda abertas).
+
+  Primeira regra fechada por dogfooding real: **estudo de prova tem de ficar colado na
+  prova**. O solver é guloso EDF a partir do `agora`, então agendou o estudo de uma
+  prova de 20/10 para **17/08** — conteúdo que nem foi dado, e esquecido na data da
+  prova. `buffer_dias` não resolve: ele só *antecipa*, nunca segura para mais tarde.
+
+  O plano dá à `Tarefa` parâmetros **ocultos** (não digitados pelo usuário, ausentes do
+  frontend): `estrategia` `CEDO`/`TARDE`, janela e dias da semana por-tarefa,
+  `nao_antes_de`, e um campo `observacao` em português que a IA **traduz** para esses
+  parâmetros — nunca aplicado às cegas. Inclui o buraco estrutural que o dogfooding
+  achou: `simular_plano` aceita `a_partir_de` e não persiste; `_replanejar` persiste e
+  não aceita. Corte em 4 PRs; o **PR A resolve o bug sem IA nenhuma**.
+
+  Duas regras de produto que saem daqui e valem além desta task: a IA **pergunta**
+  quando fica em dúvida (como *dado* no resultado, nunca bloqueando o plano — princípio
+  6), e **nunca usa linguagem técnica** com o usuário (nem nome de campo, nem UUID —
+  garantido por tabela de tradução + teste, não por prompt; ver princípio 9).
+
 ---
 
 ## Fase 2 — Decisão da IA  💡  *(com dado da Fase 0)*
@@ -301,8 +326,25 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   (Haiku-class / GPT-mini / Gemini Flash) como default quando hospedar.
 - Modelar custo (tokens × preço; por usuário ativo/mês). Manter o local como opção
   "offline/privacidade" via o mesmo `LLMProvider`.
-- O dado de **GPU real** (RX 7600) vem da **0A.6**, adiada por falta de hardware em mãos.
-  Até lá a única medição de IA local é em CPU.
+- **Terceira via — híbrido: API para entender, local para calcular.** A decisão está
+  escrita acima como binária, e o dogfooting de 15/08/2026 sugere que ela não é. Medido
+  no 7b local: ele **executa** bem (instrução explícita e única → ferramenta correta, 4
+  argumentos certos) e **compõe** mal (pedido em linguagem natural com ~10 consultas +
+  ~9 criações → zero ferramentas, disciplinas inventadas, datas deslocadas em 3 dias,
+  UUID vazado na resposta ao usuário). O arranjo que isso sugere: **modelo forte só na
+  conversa**, emitindo um JSON único de parâmetros que passa pelo **mesmo**
+  `validar_diretrizes`; **solver local** fazendo o cálculo. Conversa é rara e
+  planejamento é frequente, então o custo fica baixo. Contrapartida real: a agenda sai
+  da máquina — decisão de produto, não detalhe técnico. Desenho em
+  [`docs/tasks/fase1-parametros-por-tarefa.md`](docs/tasks/fase1-parametros-por-tarefa.md) §3.6.
+- **Dado de GPU real — já existe** (corrige a nota anterior, que dizia "até lá a única
+  medição de IA local é em CPU"): a migração para ROCm foi medida em **7,4 → 47 tok/s**
+  (commit `cc2a130`), e a telemetria da 0A.3 confirmou **~46,5–46,8 tok/s** por chamada
+  do agente em 15/08/2026. O que a **0A.6** ainda deve é o cenário *LAN* (IA no desktop,
+  app noutro host), não a medição de GPU.
+- **Teto do modelo local nesta máquina:** `8176 MiB` de VRAM. O `qwen2.5:7b` Q4 (4,7 GB)
+  cabe; um 14b Q4 (~9 GB) derrama para a CPU e perde os 47 tok/s. Subir de modelo
+  **localmente** está fora sem trocar de placa — "modelo forte" significa remoto.
 
 ---
 
@@ -398,6 +440,18 @@ O grosso da fundação já foi no beta (Fase 0B). Aqui fica o que é específico
   **manter separados**. São formas de propósito diferente (multi-turno stateful vs 1
   chamada stateless) e necessidades distintas (agente quer modelo forte remoto;
   planejador roda bem no 7B local); só o vocabulário dos valores foi alinhado.
+- **Conversa remota × privacidade** (Fase 1.1 / Fase 2) — o híbrido da Fase 2 manda a
+  agenda inteira (matérias, provas, pesos) para uma API. O projeto é ciosa disso em todo
+  o resto: a telemetria **nunca** grava conteúdo, nem atrás de flag. Aceitar o envio na
+  conversa (mantendo o planejamento local) é decisão de **produto**, não técnica.
+- ✅ **Estratégia de agendamento default por classe** (Fase 1.1): decidido no gate de
+  15/08/2026 — **não há default**. Nem herdado da classe na criação, nem lido em tempo
+  de plano: vale só o que estiver explícito na tarefa. Junto veio o princípio que rege
+  os parâmetros novos: **ortogonais**, cada um uma condição específica, sem acoplamento
+  implícito — aceita-se que sejam muitos. Foi por isso que `TARDE` **não** usa
+  `buffer_dias`: "terminar na véspera" virou `nao_depois_de`, condição própria.
+  Consequência a resolver no PR A: sem default, algo precisa ligar o campo nas tarefas
+  que já existem — ver §4 e Pendência 1 do plano.
 - **IA local vs API** — aguarda dado da Fase 0.
 - **Regras de negócio a mudar** — aguarda dogfooding (Fase 1).
 - **Hospedar (Fork A) vs desktop nativo (Fork B)** pros leigos — decidir após o beta.

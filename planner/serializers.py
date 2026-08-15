@@ -75,11 +75,66 @@ class TarefaSerializer(serializers.ModelSerializer):
             "deadline",
             "esforco_estimado",
             "status",
+            # Parâmetros de agendamento (Fase 1.1). Saem na API de propósito
+            # (decisão D4): "oculto" aqui significa "o usuário não digita", não
+            # "segredo" — o frontend simplesmente não os mapeia, e o agente/MCP
+            # os alcançam pelo caminho normal.
+            "estrategia",
+            "nao_antes_de",
+            "nao_depois_de",
+            "janela_inicio",
+            "janela_fim",
+            "dias_permitidos",
             "criado_em",
             "atualizado_em",
         ]
         # status é controlado pela máquina de estados (promover), não pelo cliente.
         read_only_fields = ["id", "status", "criado_em", "atualizado_em"]
+
+    def validate(self, attrs):
+        """Coerência dos parâmetros de agendamento.
+
+        Só o que é contraditório na entrada — nada de regra de negócio. O solver
+        já lida sozinho com "não coube" (vira `nao_alocado`); aqui barramos o que
+        nunca poderia dar certo, para o erro aparecer no PUT e não num plano
+        silenciosamente vazio.
+        """
+        atual = getattr(self, "instance", None)
+
+        def valor(campo):
+            if campo in attrs:
+                return attrs[campo]
+            return getattr(atual, campo, None)
+
+        ini, fim = valor("janela_inicio"), valor("janela_fim")
+        if (ini is None) != (fim is None):
+            raise serializers.ValidationError(
+                {"janela_inicio": "janela_inicio e janela_fim andam juntas."}
+            )
+        if ini is not None and ini >= fim:
+            raise serializers.ValidationError(
+                {"janela_fim": "janela_fim deve ser maior que janela_inicio."}
+            )
+
+        antes, depois = valor("nao_antes_de"), valor("nao_depois_de")
+        if antes and depois and antes > depois:
+            raise serializers.ValidationError(
+                {"nao_depois_de": "nao_depois_de não pode ser antes de nao_antes_de."}
+            )
+
+        dias = valor("dias_permitidos")
+        if dias is not None:
+            if not dias:
+                raise serializers.ValidationError(
+                    {
+                        "dias_permitidos": "Lista vazia proibiria todos os dias; use null."
+                    }
+                )
+            if any(d > 6 for d in dias):
+                raise serializers.ValidationError(
+                    {"dias_permitidos": "Dias vão de 0 (segunda) a 6 (domingo)."}
+                )
+        return attrs
 
 
 class RegraRecorrenciaSerializer(serializers.ModelSerializer):

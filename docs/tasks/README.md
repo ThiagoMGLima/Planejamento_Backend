@@ -34,6 +34,20 @@ implementação do código Django.
 Tasks de encaixe já concluídas enquanto isso: **0A.1** (`LLMProvider`) e **0A.3**
 (instrumentação) — ver Concluídas abaixo.
 
+## Task em andamento — Fase 1.1 (paralela ao PR2)
+
+**Parâmetros de agendamento por tarefa.** Plano
+[`fase1-parametros-por-tarefa.md`](fase1-parametros-por-tarefa.md) (gate respondido em
+15/08/2026, §7). Nasceu do dogfooding que achou estudo de prova agendado **2 meses
+antes** da prova e mediu o teto do 7b local.
+
+| PR | Estado |
+| --- | --- |
+| **A** — campos + `TARDE` no solver + limites duros/suaves | ✅ [contexto](contexto-fase1-pra.md) |
+| **B** — `aplicar_plano` como ferramenta + `a_partir_de` no caminho que persiste | 🔜 |
+| **C** — IA lê `descricao` → knobs, `pergunta` no plano, vocabulário | 🔜 |
+| **D** — handoff da conversa forte (JSON único) | ⏳ depende das decisões **D6/D7**, abertas |
+
 > **Arquitetura do beta — reconfirmada em 24/07/2026.** Cogitou-se pôr também os
 > **dados** no Supabase; foi avaliado e recusado. Segue valendo: **Supabase só para
 > Auth**, dados no Postgres local de cada testador, IA local. O trilema que fecha a
