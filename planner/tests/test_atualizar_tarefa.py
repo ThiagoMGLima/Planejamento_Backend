@@ -264,3 +264,64 @@ def test_hora_e_gravada_como_time(perfil):
     t.refresh_from_db()
     assert t.janela_inicio == time(8, 30)
     assert t.janela_fim == time(12, 0)
+
+
+# --------------------------------------------------------------------------- #
+# Preferências na ferramenta `replanejar` (o outro buraco do teste humano)     #
+# --------------------------------------------------------------------------- #
+@pytest.mark.django_db
+def test_replanejar_aceita_janela_e_ela_chega_ao_plano(perfil):
+    """ "Abra minha janela para as 6h" era inalcançável pela conversa."""
+    _tarefa(perfil, esforco_estimado=60)
+    out = agente._replanejar(perfil, janela_inicio="06:00", janela_fim="09:00")
+
+    assert "erro" not in out, out
+    usadas = out["plano"]["preferencias_usadas"]
+    assert usadas["janela_inicio"] == "06:00"
+    assert usadas["janela_fim"] == "09:00"
+
+
+@pytest.mark.django_db
+def test_replanejar_aceita_teto_diario_e_fds(perfil):
+    _tarefa(perfil, esforco_estimado=60)
+    out = agente._replanejar(perfil, evitar_fds=False, max_min_por_dia=45)
+
+    usadas = out["plano"]["preferencias_usadas"]
+    assert usadas["evitar_fds"] is False
+    assert usadas["max_min_por_dia_por_tarefa"] == 45
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"janela_inicio": "6h"},
+        {"janela_inicio": "08:00"},  # sem par
+        {"janela_inicio": "18:00", "janela_fim": "09:00"},  # invertida
+        {"evitar_fds": "sim"},
+        {"max_min_por_dia": 0},
+        {"max_min_por_dia": "muito"},
+    ],
+)
+def test_replanejar_com_preferencia_invalida_da_400(perfil, kwargs):
+    """Ferramenta devolve dict de erro — nunca levanta dentro do solver."""
+    _tarefa(perfil, esforco_estimado=60)
+    out = agente._replanejar(perfil, **kwargs)
+    assert out["erro"] == 400
+
+
+@pytest.mark.django_db
+def test_replanejar_sem_preferencia_mantem_os_defaults(perfil):
+    from planner.services import planejamento as P
+
+    _tarefa(perfil, esforco_estimado=60)
+    out = agente._replanejar(perfil)
+    assert out["plano"]["preferencias_usadas"]["janela_inicio"] == (
+        P.DEFAULTS["janela_inicio"]
+    )
+
+
+def test_replanejar_expoe_as_preferencias_no_schema():
+    props = agente.FERRAMENTAS_POR_NOME["replanejar"]["parametros"]["properties"]
+    for p in ("janela_inicio", "janela_fim", "evitar_fds", "max_min_por_dia"):
+        assert p in props

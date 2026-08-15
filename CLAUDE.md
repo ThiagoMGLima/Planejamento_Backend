@@ -164,9 +164,11 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
   Hoje quem seta de fato é a API, o admin ou `manage.py marcar_estrategia`.
 - **Endpoint para RESPONDER uma pergunta.** O plano devolve `perguntas`, mas aceitar
   uma é `PATCH /tarefas/{id}/` com o knob — funciona, não é caminho desenhado.
-- **`preferencias` na ferramenta `replanejar`** do agente. Sem isso, pedido de "abra
-  minha janela de estudo" não tem como ser atendido pela conversa. Preferência é
-  global e por-chamada — o `Perfil` não guarda nenhuma.
+- **Preferência PERSISTENTE.** A ferramenta `replanejar` já aceita `janela_inicio`,
+  `janela_fim`, `evitar_fds` e `max_min_por_dia`, mas valem **só para aquela
+  chamada**: o `Perfil` não guarda preferência nenhuma, e o frontend nunca envia. Na
+  prática, quem quiser mudar a janela de forma duradoura ainda depende do `DEFAULTS`
+  em `services/planejamento.py`.
 - **Cenários e refino não conhecem os knobs novos.** `cenarios.py` segue intocado.
 - **Um modelo que USE as ferramentas.** O mecanismo dos PRs C e C2 está pronto e
   testado, mas o `qwen2.5:7b` não o exercita: ignora a instrução de traduzir a
@@ -177,7 +179,7 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
   conversacional fica ociosa. É o gargalo que a decisão **D6** destrava.
 - **Hospedagem.** Roda só local, via compose.
 
-**Suíte:** 448 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
+**Suíte:** 458 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
 — os únicos que provam isolamento, porque usam **dois** perfis; o resto roda com um
 só, onde "global" e "do dono" coincidem.
 

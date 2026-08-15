@@ -453,8 +453,73 @@ def _aplicar_plano(
     }
 
 
-def _replanejar(dono, dias_bloqueados=None, preferencias=None, aplicar=False):
-    """Replaneja do agora em diante. `aplicar=False` só simula (plano + diff)."""
+def _preferencias_da_chamada(janela_inicio, janela_fim, evitar_fds, max_min_por_dia):
+    """Monta o dict de preferências a partir dos argumentos nomeados da ferramenta.
+
+    Nomeadas, e não um dict livre: o modelo escolhe melhor entre parâmetros com
+    nome do que dentro de um objeto aninhado, e cada uma é validável aqui. Sem
+    isto, `montar_preferencias` levantaria `ValueError` no meio do solver com um
+    "HH:MM" torto — e ferramenta que levanta quebra o contrato do loop (erro é
+    dict, nunca exceção).
+
+    Devolve `(preferencias, erro)`; só um dos dois é não-nulo.
+    """
+    prefs = {}
+    for nome, valor in (("janela_inicio", janela_inicio), ("janela_fim", janela_fim)):
+        if valor is None:
+            continue
+        if _hora_simples(valor) is None:
+            return None, _erro(400, {nome: [f"{valor!r} não é um horário HH:MM."]})
+        prefs[nome] = valor
+    if ("janela_inicio" in prefs) != ("janela_fim" in prefs):
+        return None, _erro(
+            400, {"janela_inicio": ["janela_inicio e janela_fim andam juntas."]}
+        )
+    if prefs and _hora_simples(prefs["janela_inicio"]) >= _hora_simples(
+        prefs["janela_fim"]
+    ):
+        return None, _erro(
+            400, {"janela_fim": ["janela_fim deve ser maior que janela_inicio."]}
+        )
+    if evitar_fds is not None:
+        if not isinstance(evitar_fds, bool):
+            return None, _erro(400, {"evitar_fds": ["Deve ser true ou false."]})
+        prefs["evitar_fds"] = evitar_fds
+    if max_min_por_dia is not None:
+        try:
+            teto = int(max_min_por_dia)
+        except (TypeError, ValueError):
+            return None, _erro(400, {"max_min_por_dia": ["Deve ser um inteiro ≥ 1."]})
+        if teto < 1:
+            return None, _erro(400, {"max_min_por_dia": ["Deve ser um inteiro ≥ 1."]})
+        prefs["max_min_por_dia_por_tarefa"] = teto
+    return prefs, None
+
+
+def _replanejar(
+    dono,
+    dias_bloqueados=None,
+    preferencias=None,
+    aplicar=False,
+    janela_inicio=None,
+    janela_fim=None,
+    evitar_fds=None,
+    max_min_por_dia=None,
+):
+    """Replaneja do agora em diante. `aplicar=False` só simula (plano + diff).
+
+    As preferências são **da chamada**, não da pessoa: valem para este plano e
+    não ficam gravadas em lugar nenhum (o `Perfil` ainda não guarda preferência).
+    Quem pedir "estude só de manhã" precisará repetir no próximo replanejamento —
+    limitação conhecida, registrada no "Estado atual" do CLAUDE.md.
+    """
+    da_chamada, erro = _preferencias_da_chamada(
+        janela_inicio, janela_fim, evitar_fds, max_min_por_dia
+    )
+    if erro:
+        return erro
+    preferencias = {**(preferencias or {}), **da_chamada}
+
     agora = timezone.now()
     try:
         if aplicar:
@@ -625,13 +690,28 @@ FERRAMENTAS = [
         "descricao": (
             "Replaneja a agenda do agora em diante. aplicar=false simula "
             "(nada persiste); aplicar=true substitui as sessões futuras. "
-            "'Livra meu sábado' = dias_bloqueados=['<data do sábado>']."
+            "'Livra meu sábado' = dias_bloqueados=['<data do sábado>']. "
+            "Para mudar horários do plano use janela_inicio/janela_fim (HH:MM), "
+            "evitar_fds e max_min_por_dia — valem só para este replanejamento."
         ),
         "parametros": {
             "type": "object",
             "properties": {
                 "dias_bloqueados": {"type": "array", "items": {"type": "string"}},
                 "aplicar": {"type": "boolean"},
+                "janela_inicio": {
+                    "type": "string",
+                    "description": "HH:MM — hora mais cedo do dia; anda com janela_fim",
+                },
+                "janela_fim": {"type": "string", "description": "HH:MM"},
+                "evitar_fds": {
+                    "type": "boolean",
+                    "description": "false libera sábado e domingo",
+                },
+                "max_min_por_dia": {
+                    "type": "integer",
+                    "description": "teto de minutos por dia para cada tarefa",
+                },
             },
         },
         "executar": _replanejar,
