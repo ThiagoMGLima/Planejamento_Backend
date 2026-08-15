@@ -52,14 +52,32 @@ def _sem_sobreposicao(sessoes):
 # --------------------------------------------------------------------------- #
 # TARDE — o núcleo do PR                                                       #
 # --------------------------------------------------------------------------- #
-def test_tarde_cola_a_ultima_sessao_na_deadline():
+def test_tarde_usa_os_dias_colados_no_prazo():
     prefs, _ = P.montar_preferencias({})
     deadline = aware(2026, 6, 5, 18)  # sexta 18:00
     t = _tarefa("A", 120, deadline, estrategia=P.TARDE)
     sessoes, nao = P.calcular_plano([t], [], prefs, SEG, deadline)
     assert nao == []
     assert _total(sessoes, "A") == 120
-    assert max(s.fim for s in sessoes) == deadline
+    # Tudo no próprio dia do prazo — a estratégia escolhe o DIA.
+    assert {s.inicio.date() for s in sessoes} == {date(2026, 6, 5)}
+
+
+def test_tarde_escolhe_o_dia_mas_nao_o_horario():
+    """Guarda do bug de 15/08/2026: TARDE empurrava tudo para a noite.
+
+    Varrer os slots ao contrário fazia a tarefa preferir 20h–22h e ignorar a
+    manhã livre do MESMO dia. Ninguém pediu para estudar de madrugada.
+    """
+    prefs, _ = P.montar_preferencias({})
+    deadline = aware(2026, 6, 5, 22)
+    # Sexta com manhã (06–08) e noite (20–22) livres; o resto ocupado.
+    ocupado = [(aware(2026, 6, 5, 8), aware(2026, 6, 5, 20))]
+    t = _tarefa("A", 120, deadline, estrategia=P.TARDE)
+    sessoes, _ = P.calcular_plano([t], ocupado, prefs, SEG, deadline)
+
+    assert {s.inicio.date() for s in sessoes} == {date(2026, 6, 5)}  # dia certo
+    assert min(s.inicio for s in sessoes).hour < 12  # e de manhã, não à noite
 
 
 def test_tarde_e_cedo_ocupam_extremos_opostos_da_janela():
@@ -111,8 +129,6 @@ def test_tarde_desvia_de_evento_ocupado():
     assert _total(sessoes, "A") == 60
     for s in sessoes:
         assert s.fim <= ocupado[0][0] or s.inicio >= ocupado[0][1]
-    # Encostou no evento pelo lado de trás, que é o mais tarde possível.
-    assert max(s.fim for s in sessoes) == ocupado[0][0]
 
 
 def test_tarde_recua_apenas_o_necessario_quando_falta_espaco():
@@ -138,7 +154,7 @@ def test_tarde_ignora_buffer_dias():
     t = _tarefa("A", 60, deadline, estrategia=P.TARDE, buffer_dias=3)
     sessoes, _ = P.calcular_plano([t], [], prefs, SEG, deadline)
     # Sem o desacoplamento, o buffer teria puxado tudo para 02/06.
-    assert max(s.fim for s in sessoes) == deadline
+    assert max(s.inicio.date() for s in sessoes) == date(2026, 6, 5)
 
 
 def test_cedo_continua_respeitando_buffer_dias():
@@ -304,21 +320,6 @@ def test_estrategia_nula_nao_e_tarde():
     t = _tarefa("A", 60, deadline)
     sessoes, _ = P.calcular_plano([t], [], prefs, SEG, deadline)
     assert min(s.inicio for s in sessoes).date() == date(2026, 6, 1)
-
-
-# --------------------------------------------------------------------------- #
-# Snap para baixo (unitário)                                                   #
-# --------------------------------------------------------------------------- #
-@pytest.mark.parametrize(
-    "minuto,esperado",
-    [(0, 0), (7, 0), (15, 15), (29, 15), (44, 30), (59, 45)],
-)
-def test_snap_abaixo_arredonda_para_tras(minuto, esperado):
-    from django.utils import timezone
-
-    tz = timezone.get_current_timezone()
-    dt = aware(2026, 6, 1, 10, minuto)
-    assert P._snap_abaixo(dt, 15, tz).minute == esperado
 
 
 # --------------------------------------------------------------------------- #
@@ -572,4 +573,4 @@ def test_tarde_com_prazo_dentro_do_horizonte_nao_e_afetada():
     sessoes, nao = P.calcular_plano([t], [], prefs, SEG, aware(2026, 6, 30, 22))
 
     assert nao == []
-    assert max(s.fim for s in sessoes) == deadline
+    assert max(s.inicio.date() for s in sessoes) == deadline.date()

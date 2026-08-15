@@ -326,17 +326,28 @@ def _snap_acima(dt, granularidade, tz):
     return base + timedelta(minutes=snapped)
 
 
-def _snap_abaixo(dt, granularidade, tz):
-    """Arredonda `dt` para BAIXO no grid da granularidade (espelho de `_snap_acima`).
+def _ordem_de_varredura(slots, tarde, tz):
+    """Ordem em que `_alocar` consulta os slots.
 
-    Serve à estratégia TARDE, que ancora a sessão no FIM do slot: sem isto, um
-    slot terminando às 21:52 produziria uma sessão fora do grid de 15min.
+    CEDO: cronológica, como sempre.
+
+    TARDE: **dias** do mais tarde para o mais cedo, mas **dentro de cada dia a
+    ordem normal**. "Perto do prazo" é proximidade de DATA, não de hora — a
+    primeira versão varria os slots ao contrário inteiros e, como efeito
+    colateral, empurrava todo estudo para as últimas horas do dia. Medido em
+    15/08/2026: 70% das sessões caíam depois das 20h **mesmo havendo 06:00–08:00
+    livre todos os dias** e um dia inteiro vago na semana. Ninguém pediu para
+    estudar de madrugada; pediram para estudar perto da prova.
     """
-    local = timezone.localtime(dt, tz)
-    base = local.replace(hour=0, minute=0, second=0, microsecond=0)
-    delta_min = (local - base).total_seconds() / 60
-    snapped = math.floor(delta_min / granularidade) * granularidade
-    return base + timedelta(minutes=snapped)
+    if not tarde:
+        return slots
+    por_dia = {}
+    for slot in slots:
+        por_dia.setdefault(timezone.localtime(slot[0], tz).date(), []).append(slot)
+    ordenados = []
+    for dia in sorted(por_dia, reverse=True):
+        ordenados.extend(por_dia[dia])
+    return ordenados
 
 
 def _restricao_da_tarefa(tarefa, nivel):
@@ -601,22 +612,19 @@ def _alocar(
 ):
     """Encaixa sessões da tarefa nos slots. Devolve o que sobrou.
 
-    CEDO varre os slots em ordem cronológica e ancora cada sessão no INÍCIO do
-    slot; TARDE varre ao contrário e ancora no FIM. É só isso que separa as duas
-    estratégias — tetos diários, `sessao_min/max` e o relaxamento independem da
-    direção (os tetos são dicionários por dia; a ordem não os afeta).
+    A ÚNICA diferença entre as estratégias é a ordem em que os slots são
+    consultados (`_ordem_de_varredura`): CEDO começa pelos primeiros dias, TARDE
+    pelos últimos. Dentro do dia, as duas preenchem igual e ancoram no início do
+    slot — a estratégia escolhe o DIA, nunca o horário.
 
-    Um slot nunca cruza a meia-noite (`slots_livres` monta dia a dia), então a
-    data usada nos tetos é a mesma nas duas direções.
+    Tetos diários, `sessao_min/max` e o relaxamento independem da ordem (os
+    tetos são dicionários por dia). Um slot nunca cruza a meia-noite
+    (`slots_livres` monta dia a dia), então a data do teto é sempre a do slot.
     """
     tarde = tarefa.estrategia == TARDE
-    for s_ini, s_fim in reversed(slots) if tarde else slots:
+    for s_ini, s_fim in _ordem_de_varredura(slots, tarde, tz):
         if restante <= 0:
             break
-        if tarde:
-            # O fim do slot é que vira horário de sessão: precisa cair no grid.
-            # (Os inícios já vêm snapados de `_subtrair_ocupado`.)
-            s_fim = _snap_abaixo(s_fim, prefs.granularidade, tz)
         dia = timezone.localtime(s_ini, tz).date()
         tamanho = int((s_fim - s_ini).total_seconds() // 60)
         if tamanho <= 0:
@@ -641,12 +649,8 @@ def _alocar(
         if dur < min(pn.sessao_min, restante):
             continue
 
-        if tarde:
-            fim = s_fim
-            inicio = s_fim - timedelta(minutes=dur)
-        else:
-            inicio = s_ini
-            fim = s_ini + timedelta(minutes=dur)
+        inicio = s_ini
+        fim = s_ini + timedelta(minutes=dur)
         sessoes.append(
             Sessao(tarefa.id, tarefa.titulo, tarefa.classe_id, inicio, fim, dur)
         )
