@@ -45,7 +45,7 @@ antes** da prova e mediu o teto do 7b local.
 | --- | --- |
 | **A** — campos + `TARDE` no solver + limites duros/suaves | ✅ [contexto](contexto-fase1-pra.md) |
 | **B** — `aplicar_plano` como ferramenta + `a_partir_de` no caminho que persiste | ✅ [contexto](contexto-fase1-prb.md) |
-| **C** — IA lê `descricao` → knobs, `pergunta` no plano, vocabulário | 🔜 |
+| **C** — IA lê `descricao` → knobs, `pergunta` no plano, vocabulário | ✅ [contexto](contexto-fase1-prc.md) — mecanismo pronto, mas **ocioso com o 7b local** (ver §4 de lá) |
 | **D** — handoff da conversa forte (JSON único) | ⏳ depende das decisões **D6/D7**, abertas |
 
 > **Arquitetura do beta — reconfirmada em 24/07/2026.** Cogitou-se pôr também os

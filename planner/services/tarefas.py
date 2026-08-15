@@ -29,12 +29,26 @@ class ClasseDesconhecida(ValueError):
     modelo corrigir a chamada no turno seguinte."""
 
 
-def criar(dono, titulo, classe_id=None, deadline=None, esforco_min=None, descricao=""):
+def criar(
+    dono,
+    titulo,
+    classe_id=None,
+    deadline=None,
+    esforco_min=None,
+    descricao="",
+    estrategia=None,
+):
     """Cria uma Tarefa no Inbox de um perfil, a partir de dados já normalizados.
 
     Existe para o agente ter o mesmo caminho de escrita da API **sem HTTP**. A
     validação de forma (tipos, obrigatórios) continua no serializer, no caminho
     HTTP; aqui fica a regra de domínio que os dois compartilham.
+
+    `estrategia` (Fase 1.1) entra aqui porque **não há default herdado de classe**
+    (decisão D2): sem poder setá-la na criação, toda tarefa que o agente cria
+    nasceria sem estratégia, e estudo de prova voltaria a ser agendado meses
+    antes. Os demais knobs (janelas, datas-limite) ficam de fora de propósito —
+    quem os infere é a camada de texto livre, a partir da `descricao`.
     """
     if not (titulo or "").strip():
         raise ValueError("titulo é obrigatório.")
@@ -54,6 +68,11 @@ def criar(dono, titulo, classe_id=None, deadline=None, esforco_min=None, descric
     if esforco_min is not None and int(esforco_min) < 1:
         raise ValueError("esforco_estimado deve ser um inteiro ≥ 1.")
 
+    if estrategia is not None and estrategia not in Tarefa.Estrategia.values:
+        raise ValueError(
+            f"estrategia deve ser {' ou '.join(Tarefa.Estrategia.values)}."
+        )
+
     return Tarefa.objects.create(
         dono=dono,
         titulo=titulo.strip(),
@@ -61,6 +80,7 @@ def criar(dono, titulo, classe_id=None, deadline=None, esforco_min=None, descric
         classe=classe,
         deadline=deadline,
         esforco_estimado=esforco_min,
+        estrategia=estrategia,
     )
 
 

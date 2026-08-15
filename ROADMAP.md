@@ -298,9 +298,16 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 - **1.1 Parâmetros de agendamento por tarefa** — plano
   [`fase1-parametros-por-tarefa.md`](docs/tasks/fase1-parametros-por-tarefa.md), gate
   respondido em 15/08/2026. **PR A ✅ feito**
-  ([contexto](docs/tasks/contexto-fase1-pra.md)) e **PR B ✅ feito**
-  ([contexto](docs/tasks/contexto-fase1-prb.md)); **PR C 🔜**; **PR D ⏳** (depende das
-  decisões D6/D7, ainda abertas).
+  ([contexto](docs/tasks/contexto-fase1-pra.md)), **PR B ✅**
+  ([contexto](docs/tasks/contexto-fase1-prb.md)) e **PR C ✅**
+  ([contexto](docs/tasks/contexto-fase1-prc.md)); **PR D ⏳** (depende das decisões
+  D6/D7, ainda abertas).
+
+  > ⚠️ **O PR C entrega mecanismo, não valor ainda.** Medido em 15/08/2026: o
+  > `qwen2.5:7b` **ignora** a instrução de traduzir a observação do usuário —
+  > emite só os knobs antigos, e alucinou id nas duas tentativas (o guarda-corpo
+  > descartou). A camada de texto livre só rende com modelo mais forte, o que
+  > amarra a utilidade dela à decisão **D6**.
 
   Primeira regra fechada por dogfooding real: **estudo de prova tem de ficar colado na
   prova**. O solver é guloso EDF a partir do `agora`, então agendou o estudo de uma

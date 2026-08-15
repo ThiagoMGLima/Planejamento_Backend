@@ -121,6 +121,10 @@ class TarefaEntrada:
     janela_inicio_min: int | None = None  # janela SUAVE só desta tarefa
     janela_fim_min: int | None = None
     dias_permitidos: frozenset | None = None  # 0=seg … 6=dom; SUAVE
+    # Texto livre do usuário (PR C). O solver IGNORA — quem lê é a camada de IA,
+    # que o traduz para os knobs acima. Viaja aqui só para `construir_contexto`
+    # não precisar voltar ao banco.
+    descricao: str = ""
 
 
 # Valor de `TarefaEntrada.estrategia` que inverte o sentido da alocação. Vive
@@ -158,6 +162,26 @@ def _hhmm_para_min(valor):
 def _time_para_min(valor):
     """`datetime.time` → minutos desde a meia-noite; None passa direto."""
     return None if valor is None else valor.hour * 60 + valor.minute
+
+
+def _data_ia(valor):
+    """Data ISO vinda de diretriz já validada → `date`. Tolerante por segurança."""
+    if not valor:
+        return None
+    try:
+        return date.fromisoformat(valor) if isinstance(valor, str) else valor
+    except (TypeError, ValueError):
+        return None
+
+
+def _hhmm_ia(valor):
+    """ "HH:MM" vindo de diretriz já validada → minutos do dia."""
+    if not valor:
+        return None
+    try:
+        return _hhmm_para_min(valor)
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def montar_preferencias(entrada):
@@ -755,19 +779,34 @@ def montar_plano(
                 prioridade=prioridades.get(tid),
                 buffer_dias=aj.get("buffer_dias", 0) or 0,
                 max_min_por_dia=aj.get("max_min_por_dia"),
-                # Parâmetros da própria tarefa (Fase 1.1). Vêm do model, não de
-                # diretrizes: no PR A ainda não há IA que os emita. Acesso direto
-                # (sem getattr defensivo) de propósito — quem montar um objeto de
+                # Parâmetros da própria tarefa (Fase 1.1). Acesso direto (sem
+                # getattr defensivo) de propósito — quem montar um objeto de
                 # tarefa sem estes campos deve quebrar alto, não perder o
                 # parâmetro em silêncio.
-                estrategia=t.estrategia,
-                nao_antes_de=t.nao_antes_de,
-                nao_depois_de=t.nao_depois_de,
-                janela_inicio_min=_time_para_min(t.janela_inicio),
-                janela_fim_min=_time_para_min(t.janela_fim),
+                #
+                # A diretriz da IA (PR C, lida da `descricao`) só PREENCHE o que
+                # a tarefa deixou nulo; nunca sobrescreve. A camada de texto
+                # livre é tradutora para a camada estruturada, não um canal
+                # paralelo: uma leitura errada pode acrescentar uma condição
+                # — e ela é sempre reportada —, mas não pode desfazer o que
+                # alguém disse explicitamente.
+                estrategia=t.estrategia or aj.get("estrategia"),
+                nao_antes_de=t.nao_antes_de or _data_ia(aj.get("nao_antes_de")),
+                nao_depois_de=t.nao_depois_de or _data_ia(aj.get("nao_depois_de")),
+                janela_inicio_min=_time_para_min(t.janela_inicio)
+                or _hhmm_ia(aj.get("janela_inicio")),
+                janela_fim_min=_time_para_min(t.janela_fim)
+                or _hhmm_ia(aj.get("janela_fim")),
                 dias_permitidos=(
-                    frozenset(t.dias_permitidos) if t.dias_permitidos else None
+                    frozenset(t.dias_permitidos)
+                    if t.dias_permitidos
+                    else (
+                        frozenset(aj["dias_permitidos"])
+                        if aj.get("dias_permitidos")
+                        else None
+                    )
                 ),
+                descricao=t.descricao or "",
             )
         )
 

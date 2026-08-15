@@ -105,6 +105,16 @@ def planejar_ia_task(
             "trade_offs": bruto.get("trade_offs", []),
             "alertas": planejamento_ia.alertas_do_plano(melhor),
             "sugestoes": bruto.get("sugestoes", []),
+            # PR C. `leitura` é obrigatória quando há descrição: foi a condição
+            # para reusar um campo visível como entrada de planejamento (D3).
+            # `perguntas` nunca bloqueia — o plano acima já vem com o default
+            # aplicado, e responder é opcional (D5).
+            "leitura": planejamento_ia.leitura_das_descricoes(
+                base.tarefas, diretrizes.get("ajustes_por_tarefa", {})
+            ),
+            "perguntas": planejamento_ia.validar_perguntas(
+                bruto.get("perguntas"), base.tarefas, base.agora, base.horizonte_fim
+            ),
             "ia_indisponivel": False,
         }
         # Só jobs em que a IA rodou calibram a estimativa (degradação
@@ -121,6 +131,10 @@ def planejar_ia_task(
             "trade_offs": [],
             "alertas": planejamento_ia.alertas_do_plano(base),
             "sugestoes": [],
+            # Sem IA não há leitura nem pergunta — mas as chaves existem, para o
+            # front não ter dois shapes de resposta para tratar.
+            "leitura": [],
+            "perguntas": [],
             "ia_indisponivel": True,
         }
 

@@ -83,6 +83,7 @@ def _pool_e_substituiveis(dono, agora, futuras):
                 janela_inicio=t.janela_inicio,
                 janela_fim=t.janela_fim,
                 dias_permitidos=t.dias_permitidos,
+                descricao=t.descricao,
             )
         )
 

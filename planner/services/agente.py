@@ -85,7 +85,13 @@ def _listar_classes(dono):
 
 
 def _criar_tarefa(
-    dono, titulo, classe_id=None, deadline=None, esforco_min=None, descricao=""
+    dono,
+    titulo,
+    classe_id=None,
+    deadline=None,
+    esforco_min=None,
+    descricao="",
+    estrategia=None,
 ):
     prazo = None
     if deadline is not None:
@@ -107,6 +113,7 @@ def _criar_tarefa(
             deadline=prazo,
             esforco_min=esforco_min,
             descricao=descricao,
+            estrategia=estrategia,
         )
     except tarefas.ClasseDesconhecida as e:
         # Erro acionável (E2E com o 7B): quando o modelo chuta um classe_id que
@@ -129,6 +136,7 @@ def _criar_tarefa(
         "classe": tarefa.classe.nome if tarefa.classe else None,
         "deadline": tarefa.deadline.isoformat() if tarefa.deadline else None,
         "esforco_estimado": tarefa.esforco_estimado,
+        "estrategia": tarefa.estrategia,
     }
 
 
@@ -380,7 +388,10 @@ FERRAMENTAS = [
         "descricao": (
             "Cria uma tarefa no Inbox. Para ela entrar num plano precisa de "
             "deadline (ISO-8601 com offset), esforco_min (minutos) e classe_id "
-            "(veja listar_classes)."
+            "(veja listar_classes). Use estrategia='TARDE' quando o valor da "
+            "tarefa estiver em fazê-la PERTO do prazo (estudar para prova é o "
+            "caso típico); 'CEDO' quando quanto antes melhor. Sem isso o plano "
+            "a agenda o quanto antes — estudo de prova cairia semanas antes."
         ),
         "parametros": {
             "type": "object",
@@ -390,6 +401,10 @@ FERRAMENTAS = [
                 "deadline": {"type": "string", "description": "ISO-8601 com offset"},
                 "esforco_min": {"type": "integer", "description": "minutos"},
                 "descricao": {"type": "string"},
+                "estrategia": {
+                    "type": "string",
+                    "description": "CEDO | TARDE",
+                },
             },
             "required": ["titulo"],
         },
@@ -501,7 +516,17 @@ SYSTEM_PROMPT = (
     "de novo antes de desistir. Ao "
     "terminar, responda em uma ou duas frases objetivas, em português, dizendo "
     "o que fez ou encontrou. Se faltar um dado essencial (ex.: a classe da "
-    "tarefa), pergunte em vez de adivinhar."
+    "tarefa), pergunte em vez de adivinhar. "
+    # A regra abaixo já existia no prompt do planejador (planejamento_ia.py) e
+    # faltava aqui — foi por isso que o agente respondeu ao usuário com
+    # "classe_id: c9a351f9-...". Prompt não basta (há teste que barra), mas a
+    # ausência dele era um convite.
+    "LINGUAGEM: quem lê a resposta não conhece o sistema por dentro. NUNCA "
+    "escreva id/UUID, nome de campo ou parâmetro (classe_id, tarefa_id, "
+    "estrategia, buffer_dias, max_min_por_dia, nao_antes_de…), nem nomes de "
+    "ferramenta. Refira-se às coisas pelo TÍTULO e descreva em português comum "
+    "(ex.: 'estuda perto do prazo', 'só de manhã', 'no máximo 2h por dia'). "
+    "Sem linguagem floreada."
 )
 
 # Teto do loop de tool-use: cobre o encadeamento típico (listar_classes →
