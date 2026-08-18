@@ -55,6 +55,19 @@ antes** da prova e mediu o teto do 7b local.
 > questão está em "Arquitetura do beta" no `ROADMAP.md` — vale ler antes de propor
 > mudança de infraestrutura.
 
+## Task em andamento — Fase 1.2 (segunda regra fechada pelo uso)
+
+**Aula é bloco fixo; conteúdo, prova e entrega são da ocorrência.** Plano
+[`fase1-aula-fixa-conteudo-por-ocorrencia.md`](fase1-aula-fixa-conteudo-por-ocorrencia.md)
+— ⏸️ **aguardando o gate do passo 4** (§7, sete dúvidas).
+
+Nasceu do mesmo dogfooding: as 3 disciplinas com PDF de planejamento de ensino foram
+lançadas como **58 eventos avulsos + 9 provas**, em vez de série recorrente. A
+`Ocorrencia` não tinha onde pendurar o conteúdo de uma data — ganha
+`titulo_override`/`descricao_override`/`classe_override`, e a prova passa a chamar
+atenção pela **cor da classe**, que é a regra que o frontend já tem. Fecha com um
+comando de importação, porque os PDFs das outras 4 disciplinas ainda vêm.
+
 ## Concluídas
 
 | Task | Contexto | Resumo |
