@@ -232,11 +232,21 @@ class EventoViewSet(EscopoPorDonoMixin, viewsets.ModelViewSet):
 
     @staticmethod
     def _payload_ocorrencia(evento, view):
+        """Payload da série com o que a DATA tem de diferente já aplicado.
+
+        Título, descrição e classe entram aqui (Fase 1.2) pelo mesmo motivo de
+        início/fim/status: o cliente lê os campos de sempre e não decide nada —
+        o dia de prova já chega com a classe `Prova`, e a cor sai certa sem o
+        frontend saber que override existe.
+        """
         payload = EventoSerializer(evento).data
         payload["inicio"] = view.inicio.isoformat()
         payload["fim"] = view.fim.isoformat()
         payload["status"] = view.status
         payload["status_efetivo"] = completion.status_efetivo(view)
+        payload["titulo"] = view.titulo
+        payload["descricao"] = view.descricao
+        payload["classe"] = ClasseSerializer(view.classe).data
         payload["ocorrencia"] = {
             "data": view.data.isoformat(),
             "persistida": view.persistida,

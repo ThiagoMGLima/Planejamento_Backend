@@ -15,7 +15,7 @@ from collections import namedtuple
 from planner.models import Evento
 from planner.services import holidays
 from planner.services.planejamento import JANELA_MAX
-from planner.services.recurrence import expandir
+from planner.services.recurrence import expandir, prefetch_ocorrencias
 
 # `ocorrencia` é None em evento não recorrente; senão é a view devolvida por
 # `recurrence.expandir` (inicio/fim/status/data/persistida já resolvidos).
@@ -63,7 +63,7 @@ def eventos_na_janela(dono, inicio, fim):
         Evento.objects.do_dono(dono)
         .filter(regra_recorrencia__isnull=False)
         .select_related("classe", "regra_recorrencia", "origem_tarefa")
-        .prefetch_related("ocorrencias")
+        .prefetch_related(prefetch_ocorrencias())
     )
     for ev in recorrentes:
         itens.extend(

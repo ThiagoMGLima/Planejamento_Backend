@@ -10,6 +10,7 @@ não-nulo), então não há como uma ocorrência existir fora do dono do evento.
 from uuid import uuid4
 
 from django.contrib.postgres.fields import ArrayField
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
 
@@ -329,10 +330,23 @@ class RegistroExecucao(TimestampedModel):
 
 
 class Ocorrencia(TimestampedModel):
-    """Materialização de uma data de um evento recorrente (Handoff §4.5).
+    """O que uma data específica de um evento recorrente tem de diferente.
 
-    Existe só quando o usuário toca aquela ocorrência (conclui, remarca, pula
-    ou reagenda só ela). Ocorrências não tocadas são virtuais.
+    **Duas razões para existir (a segunda entrou na Fase 1.2):**
+
+    1. o usuário TOCOU aquela data — concluiu, remarcou, pulou ou reagendou só
+       ela (`*_override` de horário e status);
+    2. aquela data tem CONTEÚDO próprio — a aula de 20/10 é a prova, a de 26/11
+       é quando o trabalho é entregue (`titulo/descricao/classe_override`).
+
+    A (2) desfaz a leitura antiga de que "ocorrência só existe quando o usuário
+    toca". A série continua expandida sob demanda (nada materializa calendário),
+    mas um semestre importado deixa ~18 linhas por disciplina aqui, escritas por
+    `importar_planejamento_ensino` sem ninguém ter clicado em nada.
+
+    Semântica de todo override: **preenchido substitui, vazio herda a série**.
+    `descricao_override` SUBSTITUI e não concatena — a descrição do evento vale o
+    semestre inteiro (ementa, professor, critério), a da ocorrência vale o dia.
     """
 
     evento = models.ForeignKey(
@@ -345,6 +359,22 @@ class Ocorrencia(TimestampedModel):
         max_length=10, null=True, blank=True
     )  # CONCLUIDO / REMARCADO / PULADO
 
+    # --- Conteúdo do dia (Fase 1.2) ------------------------------------------
+    # Resolvidos na LEITURA (services/recurrence.montar_ocorrencia), nunca
+    # copiados para dentro do Evento: a série continua sendo a fonte do que não
+    # varia. Quem consome o payload não precisa saber de onde o valor veio.
+    titulo_override = models.CharField(max_length=200, blank=True)
+    descricao_override = models.TextField(blank=True)
+    # PROTECT como `Evento.classe`, e pelo mesmo motivo: apagar a classe "Prova"
+    # com dias de prova pendurados nela tem de doer, não sumir em silêncio.
+    classe_override = models.ForeignKey(
+        Classe,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="ocorrencias_override",
+    )
+
     class Meta:
         verbose_name = "Ocorrência"
         verbose_name_plural = "Ocorrências"
@@ -353,6 +383,25 @@ class Ocorrencia(TimestampedModel):
                 fields=["evento", "data"], name="uq_ocorrencia_evento_data"
             )
         ]
+
+    def clean(self):
+        """A classe do override tem de ser do MESMO dono do evento.
+
+        `Ocorrencia` não tem `dono` para o manager escopar, e o `classe_override`
+        é a primeira FK daqui para um model por-dono — sem esta checagem, seria
+        o caminho por onde a classe de um perfil apareceria no calendário de
+        outro. Vale onde `full_clean` roda (admin e importador); a guarda de
+        verdade continua sendo o escopo de quem monta a query.
+        """
+        super().clean()
+        if (
+            self.classe_override_id
+            and self.evento_id
+            and self.classe_override.dono_id != self.evento.dono_id
+        ):
+            raise ValidationError(
+                {"classe_override": "A classe deve ser do mesmo dono do evento."}
+            )
 
     def __str__(self):
         return f"{self.evento.titulo} @ {self.data}"

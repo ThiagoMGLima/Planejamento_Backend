@@ -334,6 +334,23 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   6), e **nunca usa linguagem técnica** com o usuário (nem nome de campo, nem UUID —
   garantido por tabela de tradução + teste, não por prompt; ver princípio 9).
 
+- **1.2 Aula é bloco fixo; conteúdo, prova e entrega são da ocorrência** — plano
+  [`fase1-aula-fixa-conteudo-por-ocorrencia.md`](docs/tasks/fase1-aula-fixa-conteudo-por-ocorrencia.md),
+  gate respondido em 18/08/2026. **PR A ✅ feito**
+  ([contexto](docs/tasks/contexto-fase1-2-pra.md)); **PR B** (importador), **PR C**
+  (transcrever os PDFs + migrar os dados) e **PR D** (edição pela UI) ⏳.
+
+  Segunda regra fechada por dogfooding: **a aula não é uma sequência de eventos
+  avulsos**. As 3 disciplinas cujo PDF de planejamento de ensino foi lançado à mão
+  viraram 58 eventos por semana + 9 provas como evento próprio, e a série recorrente
+  sumiu — junto com a ideia de "compromisso fixo". O que varia por semana é o
+  **conteúdo daquela data**, e ele passou a morar na `Ocorrencia`.
+
+  Duas consequências que valem além desta task: o **dia de prova se destaca pela cor da
+  classe** (a regra que o frontend já declarava, em vez de um tratamento visual novo), e
+  **importar um planejamento de ensino vira um comando** — o que importa porque os PDFs
+  das outras 4 disciplinas ainda vêm, e lançar à mão é o que produziu o erro.
+
 ---
 
 ## Fase 2 — Decisão da IA  💡  *(com dado da Fase 0)*

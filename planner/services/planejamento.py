@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from ..models import Evento, Tarefa
 from . import holidays
-from .recurrence import expandir
+from .recurrence import expandir, prefetch_ocorrencias
 
 # Horizonte máximo do planejamento (~92 dias). Vive aqui (não na view) porque a
 # orquestração — `montar_plano` — também é usada pela task de IA.
@@ -286,7 +286,7 @@ def intervalos_ocupados(dono, agora, horizonte_fim, excluir_evento_ids=None):
         Evento.objects.do_dono(dono)
         .filter(regra_recorrencia__isnull=False)
         .select_related("regra_recorrencia")
-        .prefetch_related("ocorrencias")
+        .prefetch_related(prefetch_ocorrencias())
     )
     for ev in recorrentes:
         for view in expandir(ev, agora, horizonte_fim, feriados):

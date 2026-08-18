@@ -1,8 +1,8 @@
 # Fase 1.2 — Aula é bloco fixo; conteúdo, prova e entrega são da ocorrência
 
-> **Status:** plano escrito em 18/08/2026, **aguardando o gate do passo 4** (§7).
-> Segunda regra de negócio fechada por dogfooding real, depois da
-> [1.1](fase1-parametros-por-tarefa.md).
+> **Status:** plano escrito e **gate respondido em 18/08/2026** (§7). Segunda regra de
+> negócio fechada por dogfooding real, depois da [1.1](fase1-parametros-por-tarefa.md).
+> **PR A ✅** — ver [`contexto-fase1-2-pra.md`](contexto-fase1-2-pra.md).
 
 ## 1. O que a task é (e o que não é)
 
@@ -220,7 +220,18 @@ graça").
 | `planner/fixtures/planejamento/*.json` | novo, 1 por disciplina |
 | `CLAUDE.md`, `ROADMAP.md`, `docs/tasks/README.md` | invariante + status da 1.2 |
 
-## 7. Gate — dúvidas para o passo 4
+## 7. Gate — respondido em 18/08/2026
+
+**Todas as propostas foram aceitas**, com as duas em aberto decididas assim:
+
+- **D6 — replanejar do zero** depois da importação. Os 46 blocos de estudo já
+  promovidos não precisam ser preservados; o solver refaz.
+- **D7 — confirmado:** ASL é seg 15:50–17:30 **e** qui 15:50–18:40. São dois eventos
+  recorrentes, como a academia.
+
+O texto original das dúvidas fica abaixo, para quem ler o histórico.
+
+### As dúvidas como foram levantadas
 
 **D1 — Título por ocorrência: sempre ou só em dia especial?**
 Proposta: **só em dia especial**. Semana comum mantém o nome fixo da disciplina no bloco

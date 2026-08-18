@@ -144,6 +144,7 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
 | **1.1 / PR C2** ✅ | **`atualizar_tarefa`**: o agente não tinha como EDITAR tarefa (só criar) e duplicava ao ser pedido para alterar. A coerência dos parâmetros desceu para `services/tarefas` como **fonte única** — o serializer delega. Nulo é omissão; apagar exige `limpar` explícito; `titulo`/`descricao` não são atualizáveis pela IA | `services/tarefas.py`, `services/agente.py`, `serializers.py`, `mcp_server/server.py` |
 | **1.1 / PR C** ✅ | **texto livre → knobs**: a IA lê a `descricao`, o guarda-corpo valida os knobs novos, e o plano devolve `leitura` (o que foi entendido — sempre reportado) e `perguntas` (até 3, priorizadas). **Vocabulário voltado ao usuário vem de tabela em `services/vocabulario.py`**, não de paráfrase do modelo, com teste que barra UUID/nome de campo. ⚠️ o 7b local **não** exercita isto (ver `contexto-fase1-prc.md` §4) | `services/vocabulario.py`, `services/planejamento_ia.py`, `tasks.py` |
 | **1.1 / PR B** ✅ | **`aplicar_plano`**: o par que faltava do `simular_plano` — recalcula com os mesmos argumentos curtos (inclusive `a_partir_de`) e persiste. O plano **não** trafega pelo modelo; segunda chamada não duplica (esbarra em "já promovida"). Espelhado no MCP | `services/agente.py`, `mcp_server/server.py` |
+| **1.2 / PR A** ✅ | **conteúdo por ocorrência**: a aula vira bloco fixo recorrente e o que varia por semana (conteúdo, "hoje tem prova", "hoje entrega") mora na `Ocorrencia` — `titulo/descricao/classe_override`, resolvidos na LEITURA. Dia de prova sai na cor da classe `Prova` sem o frontend mudar nada. `prefetch_ocorrencias()` mantém a janela em 4 queries | `models.py`, `services/recurrence.py`, `views.py`, `services/agente.py`, migration `0011` |
 
 **O que ainda NÃO existe** — não assuma nada disto:
 
@@ -179,7 +180,7 @@ ao fechar uma task, mova a linha de "não existe" para cá.*
   conversacional fica ociosa. É o gargalo que a decisão **D6** destrava.
 - **Hospedagem.** Roda só local, via compose.
 
-**Suíte:** 458 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
+**Suíte:** 487 testes, dos quais 41 de isolamento (`planner/tests/test_isolamento.py`)
 — os únicos que provam isolamento, porque usam **dois** perfis; o resto roda com um
 só, onde "global" e "do dono" coincidem.
 
@@ -291,8 +292,11 @@ pelo `evento` (CASCADE, não-nulo). Todos herdam de `TimestampedModel`.
 Três invariantes que atravessam o código:
 - **`PENDENTE` é derivado na leitura, nunca gravado** (status efetivo calculado em
   `services/completion.py`).
-- **Ocorrências de eventos recorrentes são virtuais**: só existe linha `Ocorrencia`
-  quando o usuário toca aquela data (conclui/remarca/pula). Expansão sob demanda.
+- **Ocorrências de eventos recorrentes são virtuais**: a expansão é sob demanda e
+  nada materializa calendário. Mas a linha `Ocorrencia` existe por **dois** motivos
+  (o 2º entrou na Fase 1.2): o usuário TOCOU a data (conclui/remarca/pula), **ou** a
+  data tem CONTEÚDO próprio (`titulo/descricao/classe_override`) — importado, sem
+  ninguém ter clicado. Não leia "existe linha" como "o usuário mexeu".
 - **Unicidade é sempre por-dono** (`Classe.nome`, `PesoPreferencia.metrica`,
   `FeriadoLocal`): global, elas impediriam a segunda conta de existir.
 
@@ -306,7 +310,10 @@ toca o banco recebe `dono` como primeiro parâmetro obrigatório**.
   saíram da migration 0002 para cá — no migrate não havia para quem semear).
 - `recurrence.py` — expande recorrência em ocorrências virtuais via `dateutil.rrule`,
   SEMPRE dentro de uma janela limitada (nunca série infinita). Reusado por
-  `EventoViewSet.list` e pelo planejador.
+  `EventoViewSet.list` e pelo planejador. **É o único lugar que resolve o efetivo de
+  uma data** (horário, status e — desde a 1.2 — título, descrição e classe): quem
+  consome lê `OcorrenciaView` e não decide nada. Vai chamar `expandir`? use
+  `prefetch_ocorrencias()` no queryset, senão a janela vira N+1.
 - `completion.py` — deriva `PENDENTE`; `concluir`/`remarcar` são as únicas
   transições de escrita (remarcar devolve a `Tarefa` de origem ao Inbox).
 - `holidays.py` — feriados via BrasilAPI no servidor, cache agressivo + cópia stale

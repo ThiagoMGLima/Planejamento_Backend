@@ -391,14 +391,16 @@ def _consultar_agenda(dono, inicio, fim):
         ev = item.evento
         ini = timezone.localtime(agenda.inicio_efetivo(item))
         fim_ev = timezone.localtime(item.ocorrencia.fim if item.ocorrencia else ev.fim)
+        # `alvo` é a ocorrência quando existe: título e classe são os do DIA
+        # (Fase 1.2). Lendo do evento, o agente diria "Aula" num dia de prova.
         alvo = item.ocorrencia or ev
         dias.setdefault(ini.date(), []).append(
             {
                 "evento_id": str(ev.id),
-                "titulo": ev.titulo,
+                "titulo": alvo.titulo,
                 "inicio": ini.strftime("%H:%M"),
                 "fim": fim_ev.strftime("%H:%M"),
-                "classe": ev.classe.nome if ev.classe else None,
+                "classe": alvo.classe.nome if alvo.classe else None,
                 "status": completion.status_efetivo(alvo) or alvo.status,
             }
         )

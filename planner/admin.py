@@ -80,8 +80,17 @@ class RegraRecorrenciaAdmin(EscopoGlobalAdmin):
 @admin.register(Ocorrencia)
 class OcorrenciaAdmin(admin.ModelAdmin):
     # Sem `dono` próprio: herda pelo evento (CASCADE, não-nulo).
-    list_display = ("evento", "data", "status_override")
-    list_filter = ("status_override", "evento__dono")
+    # Enquanto não houver escrita pela API (decisão D3 da Fase 1.2), este painel
+    # é o único lugar de acertar à mão o conteúdo de um dia importado.
+    list_display = (
+        "evento",
+        "data",
+        "status_override",
+        "titulo_override",
+        "classe_override",
+    )
+    list_filter = ("status_override", "classe_override", "evento__dono")
+    search_fields = ("titulo_override", "descricao_override")
     date_hierarchy = "data"
 
 

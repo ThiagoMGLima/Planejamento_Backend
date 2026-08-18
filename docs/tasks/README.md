@@ -59,7 +59,14 @@ antes** da prova e mediu o teto do 7b local.
 
 **Aula é bloco fixo; conteúdo, prova e entrega são da ocorrência.** Plano
 [`fase1-aula-fixa-conteudo-por-ocorrencia.md`](fase1-aula-fixa-conteudo-por-ocorrencia.md)
-— ⏸️ **aguardando o gate do passo 4** (§7, sete dúvidas).
+(gate respondido em 18/08/2026, §7).
+
+| PR | Estado |
+| --- | --- |
+| **A** — `titulo/descricao/classe_override` na `Ocorrencia` + resolução na leitura | ✅ [contexto](contexto-fase1-2-pra.md) |
+| **B** — `importar_planejamento_ensino` (JSON por disciplina, idempotente) | ⏳ próxima |
+| **C** — transcrever os 3 PDFs, migrar os 67 avulsos, replanejar do zero | ⏳ depende de B |
+| **D** — editar conteúdo de ocorrência pela UI (escrita pela API) | ⏳ quando a UI pedir |
 
 Nasceu do mesmo dogfooding: as 3 disciplinas com PDF de planejamento de ensino foram
 lançadas como **58 eventos avulsos + 9 provas**, em vez de série recorrente. A
