@@ -25,7 +25,7 @@ from datetime import date, datetime, time, timedelta
 from django.conf import settings
 from django.utils import timezone
 
-from planner.models import Classe
+from planner.models import Classe, Tarefa
 from planner.services import (
     agenda,
     aplicacao,
@@ -92,7 +92,39 @@ def _criar_tarefa(
     esforco_min=None,
     descricao="",
     estrategia=None,
+    permitir_parecida=False,
 ):
+    # Recusa acionável contra o erro medido: pedido de ALTERAR virava criar, e o
+    # título que o modelo mandava era um prefixo do real. Mesmo padrão do erro de
+    # `classe_id` logo abaixo — devolver o dado certo e a dica faz o modelo
+    # corrigir no turno seguinte, em vez de gravar besteira em silêncio.
+    #
+    # `permitir_parecida` é a saída explícita: duas tarefas parecidas de verdade
+    # continuam possíveis, mas de propósito, nunca por acidente.
+    if not permitir_parecida:
+        existentes = tarefas.parecidas(dono, titulo)
+        if existentes:
+            return {
+                **_erro(409, {"titulo": ["Já existe tarefa com título parecido."]}),
+                "tarefas_parecidas": [
+                    {
+                        "id": str(t.id),
+                        "titulo": t.titulo,
+                        "prazo": (
+                            timezone.localtime(t.deadline).strftime("%Y-%m-%d %H:%M")
+                            if t.deadline
+                            else None
+                        ),
+                    }
+                    for t in existentes
+                ],
+                "dica": (
+                    "Se a intenção era MUDAR uma dessas, chame atualizar_tarefa "
+                    "com o id dela. Se é mesmo uma tarefa nova e diferente, "
+                    "repita criar_tarefa com permitir_parecida=true."
+                ),
+            }
+
     prazo = None
     if deadline is not None:
         prazo = _normalizar_deadline(deadline)
@@ -231,6 +263,42 @@ def _atualizar_tarefa(
             }
         ),
     }
+
+
+# Teto do grounding de tarefas. Existe pelo motivo oposto ao do grounding: o
+# payload cru da agenda (16k chars) fez o 7B re-narrar de memória em vez de
+# copiar. Mandar 45 tarefas repetiria o erro — mandar as 25 mais próximas do
+# prazo dá o id sem estourar o contexto.
+MAX_TAREFAS_NOS_FATOS = 25
+
+
+def _tarefas_para_fatos(dono):
+    """Tarefas ativas (id + título + prazo) para entrarem nos FATOS.
+
+    **Terceira instância do grounding determinístico.** Classes e datas já
+    entram assim, pela mesma razão: "o id certo é questão de copiar, não de
+    agência". Faltavam as tarefas — e isso tinha consequência concreta: pedido
+    para ALTERAR uma tarefa não tinha id à mão, e a única ferramenta que
+    dispensa id é `criar_tarefa`. O modelo não escolhia criar; caía na única
+    porta aberta, e duplicava (dogfooding de 15/08/2026, duas vezes).
+
+    Prazo já vencido fica de fora, e o corte é por proximidade de prazo:
+    conversa sobre agenda é quase sempre sobre o que está chegando.
+    """
+    qs = (
+        Tarefa.objects.do_dono(dono)
+        .filter(deadline__isnull=False, deadline__gte=timezone.now())
+        .order_by("deadline")[:MAX_TAREFAS_NOS_FATOS]
+    )
+    return [
+        {
+            "id": str(t.id),
+            "titulo": t.titulo,
+            "prazo": timezone.localtime(t.deadline).strftime("%Y-%m-%d %H:%M"),
+            "status": t.status,
+        }
+        for t in qs
+    ]
 
 
 def _listar_pendentes(dono):
@@ -583,6 +651,13 @@ FERRAMENTAS = [
                 "estrategia": {
                     "type": "string",
                     "description": "CEDO | TARDE",
+                },
+                "permitir_parecida": {
+                    "type": "boolean",
+                    "description": (
+                        "só use se a ferramenta recusou por título parecido E a "
+                        "tarefa é mesmo nova"
+                    ),
                 },
             },
             "required": ["titulo"],
@@ -948,6 +1023,10 @@ def conversar(dono, mensagem, contexto, historico=None):
         # fora — não há degradação útil: a task inteira cai e o endpoint já
         # responde com `ia_indisponivel`.
         fatos["classes"] = _listar_classes(dono)
+    # Tarefas: mesma razão das classes, e com um custo concreto medido — sem o
+    # id à mão, "altere a tarefa X" virava `criar_tarefa` e duplicava.
+    if "tarefas" not in fatos:
+        fatos["tarefas"] = _tarefas_para_fatos(dono)
     # Data é aritmética, não agência: o 7B erra "segunda que vem" contando nos
     # dedos (e ignorava a tabela genérica de dias). O dicionário usa as MESMAS
     # palavras que o usuário diria como chave — a resolução vira busca literal.

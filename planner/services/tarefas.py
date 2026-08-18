@@ -13,6 +13,7 @@ Convenção de erro: estes services levantam `ValueError` com uma mensagem de
 domínio. Quem traduz para HTTP é a view; o agente traduz para dict acionável.
 """
 
+import unicodedata
 from datetime import timedelta
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -27,6 +28,43 @@ class ClasseDesconhecida(ValueError):
     """`classe_id` que não existe. Separada porque quem chama consegue reagir:
     a API devolve 400 no campo, e o agente devolve as classes reais para o
     modelo corrigir a chamada no turno seguinte."""
+
+
+def _normalizar_titulo(texto):
+    """Minúsculas, sem acento e com espaços colapsados — para comparar títulos."""
+    sem_acento = "".join(
+        c
+        for c in unicodedata.normalize("NFD", (texto or "").casefold())
+        if unicodedata.category(c) != "Mn"
+    )
+    return " ".join(sem_acento.split())
+
+
+# Abaixo disto, "conter" não diz nada: "prova" está dentro de meia agenda.
+_MIN_TITULO_PARECIDO = 10
+
+
+def parecidas(dono, titulo):
+    """Tarefas cujo título contém o novo (ou está contido nele).
+
+    Serve à recusa acionável de `criar_tarefa`: no dogfooding de 15/08/2026 o
+    modelo tentou "alterar" tarefas chamando criar, e os títulos que ele mandou
+    eram PREFIXOS dos reais ("Estudar para a PP1" vs "Estudar para a PP1 —
+    diodos e transistor bipolar"). Comparação exata não pegaria nenhum dos dois.
+
+    Deliberadamente burro: contido/contém sobre o título normalizado. Não é
+    similaridade semântica — é o suficiente para o caso que aconteceu, e o que
+    não pega segue criando normalmente.
+    """
+    alvo = _normalizar_titulo(titulo)
+    if len(alvo) < _MIN_TITULO_PARECIDO:
+        return []
+    achadas = []
+    for t in Tarefa.objects.do_dono(dono).only("id", "titulo", "deadline"):
+        existente = _normalizar_titulo(t.titulo)
+        if alvo in existente or existente in alvo:
+            achadas.append(t)
+    return achadas
 
 
 class TarefaDesconhecida(ValueError):
