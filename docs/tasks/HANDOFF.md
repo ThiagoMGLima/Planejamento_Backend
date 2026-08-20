@@ -14,24 +14,18 @@
 que é o merge do #25. O texto anterior desta seção dizia que estavam pendentes; não
 estão mais.
 
-O que está pendente agora é outra coisa, e é maior:
+As **seis tasks acumuladas viraram o PR #26** em 19/08/2026, assumido como PR de
+acumulado (1.1 A/B/C/C2 e 1.2 A/B). **Daqui em diante volta a valer 1 task = 1 PR**, em
+branch própria.
 
 | | |
 | --- | --- |
-| Branch local | `claude/fase1-pra-parametros-tarefa` |
-| Upstream | **nenhum** — nunca foi pushada |
-| Commits à frente de `origin/main` | **16** |
-| PR aberto | nenhum |
+| Branch | `claude/fase1-pra-parametros-tarefa` → `origin` |
+| PR | **#26**, aberto contra `main` |
+| Commits à frente de `origin/main` | 17 |
 
-Esses 16 commits carregam **cinco tasks fechadas**: a Fase 1.1 inteira (PRs A, B, C e
-C2) e a Fase 1.2 / PR A. Duas consequências práticas:
-
-- **A branch violou o "1 task = 1 PR"** que o `ROADMAP.md` declara no método de
-  trabalho. O nome dela ("pra-parametros-tarefa") descreve só a primeira das cinco.
-  Antes de abrir PR, decidir se vira uma pilha de PRs ou um PR só, assumido como tal.
-- **Nada disso está no `main`.** Um agente que olhar só o `origin/main` não vê
-  `estrategia`, `aplicar_plano`, `atualizar_tarefa`, `vocabulario.py` nem os overrides
-  de `Ocorrencia`. Confirme com `git log --oneline origin/main..HEAD` antes de supor.
+O nome da branch descreve só a primeira das seis tasks — é resquício de quando ela
+acumulou. Não repita: **branch nova por task**.
 
 Também segue não-mergeada a branch remota `claude/0b-perfil-dono-e-escopo`. O **código**
 do PR1 chegou ao `main` por outro caminho, mas **um commit ficou de fora**: `e3f8a45`,
