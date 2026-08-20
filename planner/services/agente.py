@@ -20,12 +20,12 @@ resposta honesta com `ia_indisponivel: true`.
 
 import json
 from collections import namedtuple
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from django.conf import settings
 from django.utils import timezone
 
-from planner.models import Classe
+from planner.models import Classe, Tarefa
 from planner.services import (
     agenda,
     aplicacao,
@@ -85,8 +85,46 @@ def _listar_classes(dono):
 
 
 def _criar_tarefa(
-    dono, titulo, classe_id=None, deadline=None, esforco_min=None, descricao=""
+    dono,
+    titulo,
+    classe_id=None,
+    deadline=None,
+    esforco_min=None,
+    descricao="",
+    estrategia=None,
+    permitir_parecida=False,
 ):
+    # Recusa acionável contra o erro medido: pedido de ALTERAR virava criar, e o
+    # título que o modelo mandava era um prefixo do real. Mesmo padrão do erro de
+    # `classe_id` logo abaixo — devolver o dado certo e a dica faz o modelo
+    # corrigir no turno seguinte, em vez de gravar besteira em silêncio.
+    #
+    # `permitir_parecida` é a saída explícita: duas tarefas parecidas de verdade
+    # continuam possíveis, mas de propósito, nunca por acidente.
+    if not permitir_parecida:
+        existentes = tarefas.parecidas(dono, titulo)
+        if existentes:
+            return {
+                **_erro(409, {"titulo": ["Já existe tarefa com título parecido."]}),
+                "tarefas_parecidas": [
+                    {
+                        "id": str(t.id),
+                        "titulo": t.titulo,
+                        "prazo": (
+                            timezone.localtime(t.deadline).strftime("%Y-%m-%d %H:%M")
+                            if t.deadline
+                            else None
+                        ),
+                    }
+                    for t in existentes
+                ],
+                "dica": (
+                    "Se a intenção era MUDAR uma dessas, chame atualizar_tarefa "
+                    "com o id dela. Se é mesmo uma tarefa nova e diferente, "
+                    "repita criar_tarefa com permitir_parecida=true."
+                ),
+            }
+
     prazo = None
     if deadline is not None:
         prazo = _normalizar_deadline(deadline)
@@ -107,6 +145,7 @@ def _criar_tarefa(
             deadline=prazo,
             esforco_min=esforco_min,
             descricao=descricao,
+            estrategia=estrategia,
         )
     except tarefas.ClasseDesconhecida as e:
         # Erro acionável (E2E com o 7B): quando o modelo chuta um classe_id que
@@ -129,7 +168,137 @@ def _criar_tarefa(
         "classe": tarefa.classe.nome if tarefa.classe else None,
         "deadline": tarefa.deadline.isoformat() if tarefa.deadline else None,
         "esforco_estimado": tarefa.esforco_estimado,
+        "estrategia": tarefa.estrategia,
     }
+
+
+def _atualizar_tarefa(
+    dono,
+    tarefa_id,
+    deadline=None,
+    esforco_min=None,
+    estrategia=None,
+    nao_antes_de=None,
+    nao_depois_de=None,
+    janela_inicio=None,
+    janela_fim=None,
+    dias_permitidos=None,
+    limpar=None,
+):
+    """Altera uma tarefa que já existe.
+
+    Existe porque faltava: no dogfooding de 15/08/2026, pedir "faça essas duas
+    terminarem na véspera da prova" fez o modelo chamar `criar_tarefa` e
+    **duplicar** as tarefas — a única ferramenta de escrita que ele tinha. Não
+    era limitação do modelo; era ferramenta ausente.
+
+    Só campos de agendamento (ver `tarefas.CAMPOS_ATUALIZAVEIS`): `titulo` e
+    `descricao` ficam de fora porque são texto do usuário, e a descrição virou
+    insumo de planejamento — a IA reescrevê-la seria editar a própria entrada.
+
+    Argumento nulo é **ignorado**, não apagado: o modelo omite o que não quis
+    mexer, e um `None` acidental não pode zerar restrição alheia. Para limpar de
+    verdade existe `limpar`, uma lista explícita de nomes de campo.
+    """
+    campos = {
+        "deadline": _normalizar_deadline(deadline) if deadline else None,
+        "esforco_estimado": esforco_min,
+        "estrategia": estrategia,
+        "nao_antes_de": _data_simples(nao_antes_de),
+        "nao_depois_de": _data_simples(nao_depois_de),
+        "janela_inicio": _hora_simples(janela_inicio),
+        "janela_fim": _hora_simples(janela_fim),
+        "dias_permitidos": dias_permitidos,
+    }
+    if deadline and campos["deadline"] is None:
+        return _erro(400, {"deadline": [f"{deadline!r} não é uma data ISO."]})
+    for campo, cru in (
+        ("nao_antes_de", nao_antes_de),
+        ("nao_depois_de", nao_depois_de),
+        ("janela_inicio", janela_inicio),
+        ("janela_fim", janela_fim),
+    ):
+        if cru and campos[campo] is None:
+            return _erro(400, {campo: [f"{cru!r} não tem o formato esperado."]})
+
+    alterar = {c: v for c, v in campos.items() if v is not None}
+    for campo in limpar or []:
+        if campo not in tarefas.CAMPOS_ATUALIZAVEIS:
+            return _erro(400, {"limpar": [f"{campo!r} não é um campo atualizável."]})
+        alterar[campo] = None
+    if not alterar:
+        return _erro(400, "informe ao menos um campo para alterar.")
+
+    try:
+        tarefa = tarefas.atualizar(dono, tarefa_id, **alterar)
+    except tarefas.TarefaDesconhecida as e:
+        return _erro(404, str(e))
+    except tarefas.ParametrosInvalidos as e:
+        return _erro(400, e.erros)
+    except (ValueError, TypeError) as e:
+        return _erro(400, str(e))
+
+    from . import vocabulario
+
+    # Confirmação em português, escrita pelo CÓDIGO — o modelo só copia. Mesma
+    # razão da tabela de vocabulário do PR C.
+    ajuste = {c: v for c, v in alterar.items() if v is not None}
+    return {
+        "id": str(tarefa.id),
+        "titulo": tarefa.titulo,
+        "alterado": sorted(alterar),
+        "resumo": vocabulario.descrever(
+            {
+                **ajuste,
+                "janela_inicio": (
+                    tarefa.janela_inicio.strftime("%H:%M")
+                    if tarefa.janela_inicio and "janela_inicio" in alterar
+                    else None
+                ),
+                "janela_fim": (
+                    tarefa.janela_fim.strftime("%H:%M")
+                    if tarefa.janela_fim and "janela_fim" in alterar
+                    else None
+                ),
+            }
+        ),
+    }
+
+
+# Teto do grounding de tarefas. Existe pelo motivo oposto ao do grounding: o
+# payload cru da agenda (16k chars) fez o 7B re-narrar de memória em vez de
+# copiar. Mandar 45 tarefas repetiria o erro — mandar as 25 mais próximas do
+# prazo dá o id sem estourar o contexto.
+MAX_TAREFAS_NOS_FATOS = 25
+
+
+def _tarefas_para_fatos(dono):
+    """Tarefas ativas (id + título + prazo) para entrarem nos FATOS.
+
+    **Terceira instância do grounding determinístico.** Classes e datas já
+    entram assim, pela mesma razão: "o id certo é questão de copiar, não de
+    agência". Faltavam as tarefas — e isso tinha consequência concreta: pedido
+    para ALTERAR uma tarefa não tinha id à mão, e a única ferramenta que
+    dispensa id é `criar_tarefa`. O modelo não escolhia criar; caía na única
+    porta aberta, e duplicava (dogfooding de 15/08/2026, duas vezes).
+
+    Prazo já vencido fica de fora, e o corte é por proximidade de prazo:
+    conversa sobre agenda é quase sempre sobre o que está chegando.
+    """
+    qs = (
+        Tarefa.objects.do_dono(dono)
+        .filter(deadline__isnull=False, deadline__gte=timezone.now())
+        .order_by("deadline")[:MAX_TAREFAS_NOS_FATOS]
+    )
+    return [
+        {
+            "id": str(t.id),
+            "titulo": t.titulo,
+            "prazo": timezone.localtime(t.deadline).strftime("%Y-%m-%d %H:%M"),
+            "status": t.status,
+        }
+        for t in qs
+    ]
 
 
 def _listar_pendentes(dono):
@@ -163,6 +332,27 @@ def _normalizar_deadline(valor):
     if dt.utcoffset() and dt.utcoffset().total_seconds() != 0:
         return dt
     return timezone.make_aware(dt.replace(tzinfo=None))
+
+
+def _data_simples(valor):
+    """ "YYYY-MM-DD" → `date`; None/inválido → None (quem chama vira erro)."""
+    if not valor:
+        return None
+    try:
+        return date.fromisoformat(str(valor)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _hora_simples(valor):
+    """ "HH:MM" → `time`; None/inválido → None (quem chama vira erro)."""
+    if not valor:
+        return None
+    try:
+        h, m = str(valor).split(":")[:2]
+        return time(int(h), int(m))
+    except (ValueError, TypeError):
+        return None
 
 
 def _normalizar_janela(valor, eh_fim=False):
@@ -201,14 +391,16 @@ def _consultar_agenda(dono, inicio, fim):
         ev = item.evento
         ini = timezone.localtime(agenda.inicio_efetivo(item))
         fim_ev = timezone.localtime(item.ocorrencia.fim if item.ocorrencia else ev.fim)
+        # `alvo` é a ocorrência quando existe: título e classe são os do DIA
+        # (Fase 1.2). Lendo do evento, o agente diria "Aula" num dia de prova.
         alvo = item.ocorrencia or ev
         dias.setdefault(ini.date(), []).append(
             {
                 "evento_id": str(ev.id),
-                "titulo": ev.titulo,
+                "titulo": alvo.titulo,
                 "inicio": ini.strftime("%H:%M"),
                 "fim": fim_ev.strftime("%H:%M"),
-                "classe": ev.classe.nome if ev.classe else None,
+                "classe": alvo.classe.nome if alvo.classe else None,
                 "status": completion.status_efetivo(alvo) or alvo.status,
             }
         )
@@ -244,8 +436,160 @@ def _simular_plano(
     return planejamento.serializar_plano(res)
 
 
-def _replanejar(dono, dias_bloqueados=None, preferencias=None, aplicar=False):
-    """Replaneja do agora em diante. `aplicar=False` só simula (plano + diff)."""
+def _aplicar_plano(
+    dono, tarefa_ids, preferencias=None, horizonte=None, a_partir_de=None
+):
+    """Recalcula o plano com os MESMOS argumentos da simulação e PERSISTE.
+
+    Fecha o buraco que o dogfooting achou: `simular_plano` aceitava
+    `a_partir_de` e não gravava; `replanejar` gravava e não aceitava. Sem esta
+    ferramenta, um plano montado com `a_partir_de` não tinha como virar
+    calendário — nenhum prompt resolveria isso.
+
+    **O plano não volta pelo modelo.** Recebe os mesmos argumentos curtos de
+    `simular_plano` e re-roda o solver aqui dentro, em vez de aceitar uma lista
+    de sessões que o LLM teria de copiar de volta. É a mesma razão de
+    `_consultar_agenda` devolver resumo pronto: payload grande atravessando o 7B
+    volta corrompido. De quebra é o que a view `/replanejar/aplicar` já faz, e
+    pelo mesmo motivo declarado lá — "evita aplicar plano obsoleto".
+
+    A releitura pode divergir do que foi simulado se a agenda mudou no meio; o
+    retorno descreve o que foi REALMENTE criado, nunca o que se pretendia criar.
+
+    Chamar duas vezes não duplica: as tarefas viram PROMOVIDA na primeira, e
+    `validar_tarefas` as recusa na segunda ("tarefa já promovida").
+    """
+    validas, invalidas = planejamento.validar_tarefas(dono, tarefa_ids)
+    if invalidas:
+        return _erro(422, {"tarefas_invalidas": invalidas})
+
+    agora = _normalizar_janela(a_partir_de) if a_partir_de else timezone.now()
+    if agora is None:
+        return _erro(400, "a_partir_de deve ser uma data ISO.")
+
+    res = planejamento.montar_plano(
+        dono,
+        validas,
+        agora,
+        preferencias or {},
+        horizonte_dias=HORIZONTES.get(horizonte) if horizonte else None,
+    )
+    if not res.sessoes:
+        return _erro(
+            422,
+            {
+                "motivo": "o solver não achou espaço para nenhuma sessão",
+                "nao_alocado": [vars(n) for n in res.nao_alocado],
+            },
+        )
+
+    try:
+        criados = aplicacao.aplicar_sessoes(
+            dono, planejamento.serializar_plano(res)["sessoes"]
+        )
+    except aplicacao.AplicacaoInvalida as e:
+        return _erro(400, e.erros)
+
+    # Resumo por tarefa, em horário local e já digerido — o modelo copia em vez
+    # de recalcular (mesma disciplina de `_consultar_agenda`).
+    por_tarefa = {}
+    for s in res.sessoes:
+        info = por_tarefa.setdefault(
+            s.tarefa_id,
+            {
+                "tarefa": s.tarefa_titulo,
+                "sessoes": 0,
+                "minutos": 0,
+                "de": None,
+                "ate": None,
+            },
+        )
+        dia = timezone.localtime(s.inicio).date()
+        info["sessoes"] += 1
+        info["minutos"] += s.dur_min
+        info["de"] = (
+            dia.isoformat() if info["de"] is None else min(info["de"], dia.isoformat())
+        )
+        info["ate"] = (
+            dia.isoformat()
+            if info["ate"] is None
+            else max(info["ate"], dia.isoformat())
+        )
+
+    return {
+        "eventos_criados": len(criados),
+        "aplicado": list(por_tarefa.values()),
+        "nao_alocado": [vars(n) for n in res.nao_alocado],
+    }
+
+
+def _preferencias_da_chamada(janela_inicio, janela_fim, evitar_fds, max_min_por_dia):
+    """Monta o dict de preferências a partir dos argumentos nomeados da ferramenta.
+
+    Nomeadas, e não um dict livre: o modelo escolhe melhor entre parâmetros com
+    nome do que dentro de um objeto aninhado, e cada uma é validável aqui. Sem
+    isto, `montar_preferencias` levantaria `ValueError` no meio do solver com um
+    "HH:MM" torto — e ferramenta que levanta quebra o contrato do loop (erro é
+    dict, nunca exceção).
+
+    Devolve `(preferencias, erro)`; só um dos dois é não-nulo.
+    """
+    prefs = {}
+    for nome, valor in (("janela_inicio", janela_inicio), ("janela_fim", janela_fim)):
+        if valor is None:
+            continue
+        if _hora_simples(valor) is None:
+            return None, _erro(400, {nome: [f"{valor!r} não é um horário HH:MM."]})
+        prefs[nome] = valor
+    if ("janela_inicio" in prefs) != ("janela_fim" in prefs):
+        return None, _erro(
+            400, {"janela_inicio": ["janela_inicio e janela_fim andam juntas."]}
+        )
+    if prefs and _hora_simples(prefs["janela_inicio"]) >= _hora_simples(
+        prefs["janela_fim"]
+    ):
+        return None, _erro(
+            400, {"janela_fim": ["janela_fim deve ser maior que janela_inicio."]}
+        )
+    if evitar_fds is not None:
+        if not isinstance(evitar_fds, bool):
+            return None, _erro(400, {"evitar_fds": ["Deve ser true ou false."]})
+        prefs["evitar_fds"] = evitar_fds
+    if max_min_por_dia is not None:
+        try:
+            teto = int(max_min_por_dia)
+        except (TypeError, ValueError):
+            return None, _erro(400, {"max_min_por_dia": ["Deve ser um inteiro ≥ 1."]})
+        if teto < 1:
+            return None, _erro(400, {"max_min_por_dia": ["Deve ser um inteiro ≥ 1."]})
+        prefs["max_min_por_dia_por_tarefa"] = teto
+    return prefs, None
+
+
+def _replanejar(
+    dono,
+    dias_bloqueados=None,
+    preferencias=None,
+    aplicar=False,
+    janela_inicio=None,
+    janela_fim=None,
+    evitar_fds=None,
+    max_min_por_dia=None,
+):
+    """Replaneja do agora em diante. `aplicar=False` só simula (plano + diff).
+
+    As preferências são **da chamada**, não da pessoa: valem para este plano e
+    não ficam gravadas em lugar nenhum (o `Perfil` ainda não guarda preferência).
+    Quem pedir "estude só de manhã" precisará repetir no próximo replanejamento —
+    limitação conhecida, registrada no "Estado atual" do CLAUDE.md.
+    """
+    da_chamada, erro = _preferencias_da_chamada(
+        janela_inicio, janela_fim, evitar_fds, max_min_por_dia
+    )
+    if erro:
+        return erro
+    preferencias = {**(preferencias or {}), **da_chamada}
+
     agora = timezone.now()
     try:
         if aplicar:
@@ -293,7 +637,10 @@ FERRAMENTAS = [
         "descricao": (
             "Cria uma tarefa no Inbox. Para ela entrar num plano precisa de "
             "deadline (ISO-8601 com offset), esforco_min (minutos) e classe_id "
-            "(veja listar_classes)."
+            "(veja listar_classes). Use estrategia='TARDE' quando o valor da "
+            "tarefa estiver em fazê-la PERTO do prazo (estudar para prova é o "
+            "caso típico); 'CEDO' quando quanto antes melhor. Sem isso o plano "
+            "a agenda o quanto antes — estudo de prova cairia semanas antes."
         ),
         "parametros": {
             "type": "object",
@@ -303,10 +650,51 @@ FERRAMENTAS = [
                 "deadline": {"type": "string", "description": "ISO-8601 com offset"},
                 "esforco_min": {"type": "integer", "description": "minutos"},
                 "descricao": {"type": "string"},
+                "estrategia": {
+                    "type": "string",
+                    "description": "CEDO | TARDE",
+                },
+                "permitir_parecida": {
+                    "type": "boolean",
+                    "description": (
+                        "só use se a ferramenta recusou por título parecido E a "
+                        "tarefa é mesmo nova"
+                    ),
+                },
             },
             "required": ["titulo"],
         },
         "executar": _criar_tarefa,
+        "muda_estado": True,
+    },
+    {
+        "nome": "atualizar_tarefa",
+        "descricao": (
+            "Altera uma tarefa que JÁ EXISTE (nunca use criar_tarefa para isso). "
+            "Campos: deadline, esforco_min, estrategia (CEDO|TARDE), "
+            "nao_antes_de e nao_depois_de (YYYY-MM-DD), janela_inicio e "
+            "janela_fim (HH:MM, andam juntas), dias_permitidos (0=segunda … "
+            "6=domingo). Omita o que não vai mudar. Para uma tarefa terminar "
+            "antes do prazo, use nao_depois_de. Para apagar uma restrição, "
+            "passe o nome dela em `limpar`."
+        ),
+        "parametros": {
+            "type": "object",
+            "properties": {
+                "tarefa_id": {"type": "string"},
+                "deadline": {"type": "string"},
+                "esforco_min": {"type": "integer"},
+                "estrategia": {"type": "string"},
+                "nao_antes_de": {"type": "string"},
+                "nao_depois_de": {"type": "string"},
+                "janela_inicio": {"type": "string"},
+                "janela_fim": {"type": "string"},
+                "dias_permitidos": {"type": "array", "items": {"type": "integer"}},
+                "limpar": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["tarefa_id"],
+        },
+        "executar": _atualizar_tarefa,
         "muda_estado": True,
     },
     {
@@ -355,17 +743,52 @@ FERRAMENTAS = [
         "muda_estado": False,
     },
     {
+        "nome": "aplicar_plano",
+        "descricao": (
+            "GRAVA no calendário o plano das tarefas indicadas: recalcula com os "
+            "mesmos argumentos de simular_plano e cria os eventos. Use DEPOIS de "
+            "simular e o usuário concordar. Mesmos parâmetros de simular_plano — "
+            "inclusive a_partir_de, que é como um estudo fica colado na prova."
+        ),
+        "parametros": {
+            "type": "object",
+            "properties": {
+                "tarefa_ids": {"type": "array", "items": {"type": "string"}},
+                "horizonte": {"type": "string"},
+                "a_partir_de": {"type": "string"},
+            },
+            "required": ["tarefa_ids"],
+        },
+        "executar": _aplicar_plano,
+        "muda_estado": True,
+    },
+    {
         "nome": "replanejar",
         "descricao": (
             "Replaneja a agenda do agora em diante. aplicar=false simula "
             "(nada persiste); aplicar=true substitui as sessões futuras. "
-            "'Livra meu sábado' = dias_bloqueados=['<data do sábado>']."
+            "'Livra meu sábado' = dias_bloqueados=['<data do sábado>']. "
+            "Para mudar horários do plano use janela_inicio/janela_fim (HH:MM), "
+            "evitar_fds e max_min_por_dia — valem só para este replanejamento."
         ),
         "parametros": {
             "type": "object",
             "properties": {
                 "dias_bloqueados": {"type": "array", "items": {"type": "string"}},
                 "aplicar": {"type": "boolean"},
+                "janela_inicio": {
+                    "type": "string",
+                    "description": "HH:MM — hora mais cedo do dia; anda com janela_fim",
+                },
+                "janela_fim": {"type": "string", "description": "HH:MM"},
+                "evitar_fds": {
+                    "type": "boolean",
+                    "description": "false libera sábado e domingo",
+                },
+                "max_min_por_dia": {
+                    "type": "integer",
+                    "description": "teto de minutos por dia para cada tarefa",
+                },
             },
         },
         "executar": _replanejar,
@@ -394,7 +817,17 @@ SYSTEM_PROMPT = (
     "de novo antes de desistir. Ao "
     "terminar, responda em uma ou duas frases objetivas, em português, dizendo "
     "o que fez ou encontrou. Se faltar um dado essencial (ex.: a classe da "
-    "tarefa), pergunte em vez de adivinhar."
+    "tarefa), pergunte em vez de adivinhar. "
+    # A regra abaixo já existia no prompt do planejador (planejamento_ia.py) e
+    # faltava aqui — foi por isso que o agente respondeu ao usuário com
+    # "classe_id: c9a351f9-...". Prompt não basta (há teste que barra), mas a
+    # ausência dele era um convite.
+    "LINGUAGEM: quem lê a resposta não conhece o sistema por dentro. NUNCA "
+    "escreva id/UUID, nome de campo ou parâmetro (classe_id, tarefa_id, "
+    "estrategia, buffer_dias, max_min_por_dia, nao_antes_de…), nem nomes de "
+    "ferramenta. Refira-se às coisas pelo TÍTULO e descreva em português comum "
+    "(ex.: 'estuda perto do prazo', 'só de manhã', 'no máximo 2h por dia'). "
+    "Sem linguagem floreada."
 )
 
 # Teto do loop de tool-use: cobre o encadeamento típico (listar_classes →
@@ -592,6 +1025,10 @@ def conversar(dono, mensagem, contexto, historico=None):
         # fora — não há degradação útil: a task inteira cai e o endpoint já
         # responde com `ia_indisponivel`.
         fatos["classes"] = _listar_classes(dono)
+    # Tarefas: mesma razão das classes, e com um custo concreto medido — sem o
+    # id à mão, "altere a tarefa X" virava `criar_tarefa` e duplicava.
+    if "tarefas" not in fatos:
+        fatos["tarefas"] = _tarefas_para_fatos(dono)
     # Data é aritmética, não agência: o 7B erra "segunda que vem" contando nos
     # dedos (e ignorava a tabela genérica de dias). O dicionário usa as MESMAS
     # palavras que o usuário diria como chave — a resolução vira busca literal.

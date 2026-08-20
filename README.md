@@ -54,21 +54,38 @@ Ollama local que aperfeiçoa o plano. Ver abaixo.
 - **0A.3** ✅ **telemetria** (`services/telemetria.py`): um registro JSONL por chamada de
   IA — duração, tokens, `tok_s` e carga de modelo separada — nas 4 famílias, inclusive o
   agente. É o dado que a Fase 2 usa para decidir IA local vs API. Nunca grava conteúdo.
-- **0A.2 / 0A.4 / 0A.5 / 0A.6** ⏳ empacotamento, launcher, matriz de modelos e IA remota
-  na LAN (esta última adiada por hardware).
+- **0A.2 / 0A.4 / 0A.5** ⏳ empacotamento, launcher e matriz de modelos.
+- **0A.6** ⏳ IA remota na LAN — o desktop com a RX 7600 já é a máquina de
+  desenvolvimento; faltam o host sempre-ligado e o PR2 (não se serve API sem auth na LAN).
 
 **Fase 0B — Contas** 🔜 em andamento (4 PRs):
 
 - **PR0** ✅ views finas + ferramentas do agente chamando os services em processo.
 - **PR1** ✅ `Perfil`, FK `dono` nos 8 models-raiz, unicidade por-dono e o manager
   que exige escopo; 41 testes de isolamento com dois perfis.
-- **PR2** 🔜 `SupabaseJWTAuthentication` + provisionamento JIT. O **pré-requisito
+- **PR2** ⏸️ `SupabaseJWTAuthentication` + provisionamento JIT. O **pré-requisito
   externo já está cumprido** (projeto Supabase criado, ES256, URLs configuradas e
   verificação de assinatura testada ponta a ponta — ver
-  `docs/tasks/fase0b-pr2-supabase.md`). Falta o plano de implementação e o código.
+  `docs/tasks/fase0b-pr2-supabase.md`). Falta o plano de implementação e o código —
+  parado desde 08/08/2026, **não bloqueado**.
 - **PR3** ⏳ conta demo + gate de pagamento stub.
 
-**Próximo:** PR2. Contexto em `docs/tasks/README.md`.
+**Fase 1 — Dogfooding + fechar regras de negócio** 🔜 em andamento (paralela à Fase 0).
+São regras fechadas por uso real do sistema, não por especulação:
+
+- **1.1 — parâmetros de agendamento por tarefa** (PRs A/B/C/C2 ✅, D ⏸️): `estrategia`
+  `CEDO`/**`TARDE`**, pisos e tetos duros de data, janela e dias por-tarefa, e a IA
+  traduzindo uma observação em português para esses parâmetros. Nasceu de um bug real —
+  o solver, guloso EDF, agendava estudo de prova **dois meses antes** da prova.
+- **1.2 — aula é bloco fixo; conteúdo, prova e entrega são da ocorrência** (PRs A e
+  B ✅, C/D ⏳): `titulo/descricao/classe_override` na `Ocorrencia`, resolvidos na
+  leitura, e `manage.py importar_planejamento_ensino` para trazer um planejamento de
+  ensino inteiro de um JSON por disciplina. O dia de prova passa a se destacar pela
+  **cor da classe**, sem o frontend mudar nada.
+
+**Próximo:** PR C da Fase 1.2 — transcrever os 3 PDFs de planejamento de ensino e rodar
+a migração dos dados. Depois dele a Fase 0 volta a ser a frente (PR2). Ver "Onde
+estamos" no `ROADMAP.md` e `docs/tasks/README.md`.
 
 ## Planejamento (solver + IA)
 
@@ -78,6 +95,12 @@ um plano de sessões de produção:
 1. **Solver** (`POST /planejamento/calcular`, síncrono): aloca as tarefas em
    sessões respeitando janelas, tetos diários e eventos já no calendário
    ("ocupado"). O que não couber volta em `nao_alocado`.
+   > ⚠️ O solver aloca sempre **o mais cedo possível** (guloso EDF a partir do
+   > `agora`) — não existe "o mais tarde possível". Para tarefas cujo valor está em
+   > ficar **perto** do prazo (estudar para uma prova), passe `a_partir_de` recuado
+   > o mínimo necessário; sem isso o estudo de uma prova de dezembro cai em agosto.
+   > `buffer_dias` não serve: ele só antecipa. Ver
+   > [`docs/tasks/fase1-parametros-por-tarefa.md`](docs/tasks/fase1-parametros-por-tarefa.md).
 2. **IA** (`POST /planejamento/planejar-ia`, assíncrono via Celery): roda o
    solver, manda os FATOS para o modelo, que devolve **diretrizes** (prioridades,
    buffers, tetos diários por tarefa e total) buscando uma rotina mais **humana**

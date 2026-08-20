@@ -89,6 +89,8 @@ def test_sessoes_substituidas_nao_se_autobloqueiam(perfil):
             inicio=aware(2026, 6, d, inicio_fixo),
             fim=aware(2026, 6, d, 22),
         )
+    # Terça: bloqueia 06–08 à parte, deixando exatamente o slot da sessão (08–10).
+    EventoFactory(classe=classe, inicio=aware(2026, 6, 2, 6), fim=aware(2026, 6, 2, 8))
     t = _tarefa_promovida(esforco=120, deadline=aware(2026, 6, 5, 18))
     _sessao(t, aware(2026, 6, 2, 8), aware(2026, 6, 2, 10))
 

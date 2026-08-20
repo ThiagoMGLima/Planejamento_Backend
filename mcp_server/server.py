@@ -104,6 +104,41 @@ async def listar_tarefas(
     return itens
 
 
+async def atualizar_tarefa(
+    tarefa_id: str,
+    deadline: str | None = None,
+    esforco_min: int | None = None,
+    estrategia: str | None = None,
+    nao_antes_de: str | None = None,
+    nao_depois_de: str | None = None,
+    janela_inicio: str | None = None,
+    janela_fim: str | None = None,
+    dias_permitidos: list[int] | None = None,
+) -> dict:
+    """Altera uma tarefa que JÁ EXISTE (nunca use criar_tarefa para isso).
+
+    estrategia: CEDO | TARDE. nao_antes_de/nao_depois_de: YYYY-MM-DD (para
+    terminar antes do prazo, use nao_depois_de). janela_inicio/janela_fim: HH:MM,
+    andam juntas. dias_permitidos: 0=segunda … 6=domingo. Omita o que não muda."""
+    corpo = {
+        k: v
+        for k, v in (
+            ("deadline", deadline),
+            ("esforco_estimado", esforco_min),
+            ("estrategia", estrategia),
+            ("nao_antes_de", nao_antes_de),
+            ("nao_depois_de", nao_depois_de),
+            ("janela_inicio", janela_inicio),
+            ("janela_fim", janela_fim),
+            ("dias_permitidos", dias_permitidos),
+        )
+        if v is not None
+    }
+    if not corpo:
+        return {"erro": "informe ao menos um campo para alterar"}
+    return await _api("PATCH", f"/tarefas/{tarefa_id}/", json=corpo)
+
+
 async def listar_pendentes() -> list | dict:
     """Eventos rastreáveis já vencidos e não concluídos (status PENDENTE)."""
     return await _api("GET", "/pendentes")
@@ -151,6 +186,50 @@ async def simular_plano(
     if a_partir_de:
         corpo["a_partir_de"] = a_partir_de
     return await _api("POST", "/planejamento/calcular", json=corpo)
+
+
+async def aplicar_plano(
+    tarefa_ids: list[str],
+    preferencias: dict | None = None,
+    horizonte: str | None = None,
+    a_partir_de: str | None = None,
+) -> dict:
+    """GRAVA no calendário o plano das tarefas indicadas. Mesmos parâmetros de
+    simular_plano — use depois de simular e o usuário concordar.
+
+    a_partir_de adia o início da busca: é como um estudo fica colado na prova
+    em vez de ser agendado semanas antes."""
+    corpo = {"tarefa_ids": tarefa_ids}
+    if preferencias:
+        corpo["preferencias"] = preferencias
+    if horizonte:
+        corpo["horizonte"] = horizonte
+    if a_partir_de:
+        corpo["a_partir_de"] = a_partir_de
+
+    # Recalcula e aplica em duas chamadas porque `/planejamento/aplicar` recebe
+    # SESSÕES, não parâmetros. Encadear aqui mantém a lista de sessões dentro do
+    # servidor MCP, longe do modelo — mesma razão de `simular_plano` existir
+    # separado: payload grande atravessando um LLM volta corrompido. O cliente
+    # MCP passa só os argumentos curtos.
+    plano = await _api("POST", "/planejamento/calcular", json=corpo)
+    if "erro" in plano:
+        return plano
+    if not plano.get("sessoes"):
+        return {
+            "erro": "plano vazio",
+            "detalhe": "o solver não achou espaço para nenhuma sessão",
+            "nao_alocado": plano.get("nao_alocado", []),
+        }
+    criados = await _api(
+        "POST", "/planejamento/aplicar", json={"sessoes": plano["sessoes"]}
+    )
+    if isinstance(criados, dict) and "erro" in criados:
+        return criados
+    return {
+        "eventos_criados": len(criados),
+        "nao_alocado": plano.get("nao_alocado", []),
+    }
 
 
 async def _aguardar_job(caminho_status, job_id):
@@ -259,20 +338,26 @@ async def remarcar(
 
 # Registro explícito (em vez de decorator): mantém os símbolos do módulo como
 # funções puras — os testes de contrato as chamam direto, com o HTTP mockado.
-for _fn in (
+# A tupla é nomeada para o teste poder afirmar que uma tool nova foi de fato
+# registrada: definir a função e esquecer de registrá-la falha em silêncio.
+TOOLS = (
     criar_tarefa,
     listar_classes,
     listar_tarefas,
+    atualizar_tarefa,
     listar_pendentes,
     consultar_agenda,
     concluir,
     simular_plano,
+    aplicar_plano,
     gerar_cenarios,
     refinar_cenario,
     escolher_cenario,
     replanejar,
     remarcar,
-):
+)
+
+for _fn in TOOLS:
     mcp.tool()(_fn)
 
 

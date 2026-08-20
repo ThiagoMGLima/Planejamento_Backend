@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from ..models import Evento, Tarefa
 from . import holidays
-from .recurrence import expandir
+from .recurrence import expandir, prefetch_ocorrencias
 
 # Horizonte máximo do planejamento (~92 dias). Vive aqui (não na view) porque a
 # orquestração — `montar_plano` — também é usada pela task de IA.
@@ -37,6 +37,17 @@ HORIZONTES = {
 }
 
 # Defaults das preferências (handoff §5). Horários como "HH:MM"; minutos como int.
+#
+# `janela_inicio` **continua em 08:00**. Em 15/08/2026 desceu para 06:00 tentando
+# resolver o excesso de sessões noturnas, e foi revertida: quem causava as noites
+# era a ordem de varredura da estratégia TARDE (ver `_ordem_de_varredura`), não a
+# falta de manhã. Corrigida a ordem, qualquer janela dá zero sessão noturna — e
+# 06:00 só trocava "menos sessões" por "estudar de madrugada".
+#
+# É default GLOBAL, não preferência por usuário: não há armazenamento de preferência
+# no `Perfil`, e o frontend nunca envia `preferencias` (só mandaria "quando há algo a
+# sobrescrever", e nada popula isso). Quando o perfil guardar preferências, esta
+# linha vira fallback.
 DEFAULTS = {
     "janela_inicio": "08:00",
     "janela_fim": "22:00",
@@ -96,8 +107,14 @@ class _PrefsNivel:
 class TarefaEntrada:
     """Tarefa elegível, já validada pela view (tem deadline/esforço/classe).
 
-    Os 3 últimos campos são "knobs" opcionais que a IA pode setar via diretrizes
-    (Fase A). Os defaults preservam exatamente o comportamento do solver puro.
+    Os campos após `deadline` são "knobs" opcionais. Os 3 primeiros vêm de
+    diretrizes da IA (Fase A); os 6 últimos são parâmetros da própria tarefa
+    (Fase 1.1) e chegam do model. **Todos os defaults preservam exatamente o
+    comportamento do solver puro.**
+
+    Os knobs da Fase 1.1 são ORTOGONAIS entre si e em relação aos da IA: cada um
+    expressa uma condição e nenhum muda o sentido de outro. Em particular,
+    `estrategia == TARDE` **não** aciona `buffer_dias` (ver `_deadline_efetiva`).
     """
 
     id: str
@@ -108,6 +125,23 @@ class TarefaEntrada:
     prioridade: int | None = None  # 1..5 (None ⇒ neutro = 3); desempate do EDF
     buffer_dias: int = 0  # terminar N dias antes da deadline
     max_min_por_dia: int | None = None  # teto diário específico desta tarefa
+    # --- Fase 1.1 (parâmetros da tarefa) ---
+    estrategia: str | None = None  # None|"CEDO" ⇒ o quanto antes; "TARDE" ⇒ colado
+    nao_antes_de: date | None = None  # piso DURO de data
+    nao_depois_de: date | None = None  # teto DURO de data
+    janela_inicio_min: int | None = None  # janela SUAVE só desta tarefa
+    janela_fim_min: int | None = None
+    dias_permitidos: frozenset | None = None  # 0=seg … 6=dom; SUAVE
+    # Texto livre do usuário (PR C). O solver IGNORA — quem lê é a camada de IA,
+    # que o traduz para os knobs acima. Viaja aqui só para `construir_contexto`
+    # não precisar voltar ao banco.
+    descricao: str = ""
+
+
+# Valor de `TarefaEntrada.estrategia` que inverte o sentido da alocação. Vive
+# aqui (e não importado de models) porque o solver é função pura: os testes
+# montam TarefaEntrada sem tocar no banco.
+TARDE = "TARDE"
 
 
 @dataclass
@@ -134,6 +168,31 @@ class NaoAlocado:
 def _hhmm_para_min(valor):
     horas, minutos = valor.split(":")
     return int(horas) * 60 + int(minutos)
+
+
+def _time_para_min(valor):
+    """`datetime.time` → minutos desde a meia-noite; None passa direto."""
+    return None if valor is None else valor.hour * 60 + valor.minute
+
+
+def _data_ia(valor):
+    """Data ISO vinda de diretriz já validada → `date`. Tolerante por segurança."""
+    if not valor:
+        return None
+    try:
+        return date.fromisoformat(valor) if isinstance(valor, str) else valor
+    except (TypeError, ValueError):
+        return None
+
+
+def _hhmm_ia(valor):
+    """ "HH:MM" vindo de diretriz já validada → minutos do dia."""
+    if not valor:
+        return None
+    try:
+        return _hhmm_para_min(valor)
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def montar_preferencias(entrada):
@@ -227,7 +286,7 @@ def intervalos_ocupados(dono, agora, horizonte_fim, excluir_evento_ids=None):
         Evento.objects.do_dono(dono)
         .filter(regra_recorrencia__isnull=False)
         .select_related("regra_recorrencia")
-        .prefetch_related("ocorrencias")
+        .prefetch_related(prefetch_ocorrencias())
     )
     for ev in recorrentes:
         for view in expandir(ev, agora, horizonte_fim, feriados):
@@ -268,6 +327,49 @@ def _snap_acima(dt, granularidade, tz):
     return base + timedelta(minutes=snapped)
 
 
+def _ordem_de_varredura(slots, tarde, tz):
+    """Ordem em que `_alocar` consulta os slots.
+
+    CEDO: cronológica, como sempre.
+
+    TARDE: **dias** do mais tarde para o mais cedo, mas **dentro de cada dia a
+    ordem normal**. "Perto do prazo" é proximidade de DATA, não de hora — a
+    primeira versão varria os slots ao contrário inteiros e, como efeito
+    colateral, empurrava todo estudo para as últimas horas do dia. Medido em
+    15/08/2026: 70% das sessões caíam depois das 20h **mesmo havendo 06:00–08:00
+    livre todos os dias** e um dia inteiro vago na semana. Ninguém pediu para
+    estudar de madrugada; pediram para estudar perto da prova.
+    """
+    if not tarde:
+        return slots
+    por_dia = {}
+    for slot in slots:
+        por_dia.setdefault(timezone.localtime(slot[0], tz).date(), []).append(slot)
+    ordenados = []
+    for dia in sorted(por_dia, reverse=True):
+        ordenados.extend(por_dia[dia])
+    return ordenados
+
+
+def _restricao_da_tarefa(tarefa, nivel):
+    """Janela/dias da própria tarefa, ou None quando o relaxamento já os dispensou.
+
+    São restrições SUAVES: valem enquanto os overrides globais de janela valem
+    (nível < 3). No nível ≥ 3 o solver abre o dia inteiro, e segurar a janela de
+    uma tarefa ali deixaria `nao_alocado` por preferência, não por falta de
+    espaço. Os pisos/tetos de DATA não passam por aqui — aqueles são duros.
+    """
+    if nivel >= 3:
+        return None
+    janela = None
+    if tarefa.janela_inicio_min is not None and tarefa.janela_fim_min is not None:
+        if tarefa.janela_inicio_min < tarefa.janela_fim_min:
+            janela = (tarefa.janela_inicio_min, tarefa.janela_fim_min)
+    if janela is None and not tarefa.dias_permitidos:
+        return None
+    return (janela, tarefa.dias_permitidos or None)
+
+
 def _janela_do_dia(dia, pn):
     """(ini_min, fim_min) do dia ou None (dia fora do plano).
 
@@ -290,19 +392,31 @@ def _janela_do_dia(dia, pn):
     return (pn.janela_inicio_min, pn.janela_fim_min)
 
 
-def slots_livres(inicio_busca, fim_busca, pn, granularidade, ocupado):
+def slots_livres(inicio_busca, fim_busca, pn, granularidade, ocupado, restricao=None):
     """Intervalos livres dentro de [inicio_busca, fim_busca], dia a dia.
 
     Para cada dia resolve a janela via `_janela_do_dia` (horário local; pula
     dias bloqueados e fim de semana se `pn.evitar_fds`), subtrai `ocupado` e
     snapa os inícios na granularidade. Devolve em ordem cronológica.
+
+    `restricao` (Fase 1.1) é o `(janela, dias_permitidos)` da tarefa, já filtrado
+    por nível em `_restricao_da_tarefa`. Compõe com a janela do dia pelo **mais
+    restritivo** — nunca amplia o que a preferência do usuário permitiu.
     """
     tz = timezone.get_current_timezone()
     slots = []
+    janela_tarefa, dias_permitidos = restricao or (None, None)
     dia = timezone.localtime(inicio_busca, tz).date()
     ultimo = timezone.localtime(fim_busca, tz).date()
     while dia <= ultimo:
         janela = _janela_do_dia(dia, pn)
+        if janela is not None and dias_permitidos is not None:
+            if dia.weekday() not in dias_permitidos:
+                janela = None
+        if janela is not None and janela_tarefa is not None:
+            ini_min = max(janela[0], janela_tarefa[0])
+            fim_min = min(janela[1], janela_tarefa[1])
+            janela = (ini_min, fim_min) if ini_min < fim_min else None
         if janela is not None:
             ini_min, fim_min = janela
             meia_noite = _midnight_aware(dia, tz)
@@ -345,11 +459,32 @@ def _subtrair_ocupado(ini, fim, ocupado, granularidade, tz):
 # Núcleo guloso                                                                #
 # --------------------------------------------------------------------------- #
 def _deadline_efetiva(tarefa, agora):
-    """Deadline antecipada pelo buffer; se o buffer a jogar pro passado, ignora."""
-    if not tarefa.buffer_dias:
+    """Deadline antecipada pelo buffer; se o buffer a jogar pro passado, ignora.
+
+    **TARDE ignora `buffer_dias`** (decisão D1 do gate): os dois knobs são
+    ortogonais, e antecipar a deadline de uma tarefa que pediu para ficar colada
+    nela seria um puxar contra o outro. Quem quer folga antes do prazo numa
+    tarefa TARDE usa `nao_depois_de`, que diz isso explicitamente.
+    """
+    if tarefa.estrategia == TARDE or not tarefa.buffer_dias:
         return tarefa.deadline
     efetiva = tarefa.deadline - timedelta(days=tarefa.buffer_dias)
     return efetiva if efetiva > agora else tarefa.deadline
+
+
+def _limites_duros(tarefa, agora, deadline_efetiva, horizonte_fim, tz):
+    """(inicio_busca, fim_busca) já com os pisos/tetos de data da tarefa.
+
+    Duros: entram uma vez, fora do laço de níveis, e nenhum relaxamento os toca.
+    `nao_depois_de` é inclusivo — o teto é a meia-noite do dia SEGUINTE.
+    """
+    inicio = agora
+    fim = min(deadline_efetiva, horizonte_fim)
+    if tarefa.nao_antes_de:
+        inicio = max(inicio, _midnight_aware(tarefa.nao_antes_de, tz))
+    if tarefa.nao_depois_de:
+        fim = min(fim, _midnight_aware(tarefa.nao_depois_de + timedelta(days=1), tz))
+    return inicio, fim
 
 
 def calcular_plano(tarefas, ocupado, prefs, agora, horizonte_fim):
@@ -384,12 +519,59 @@ def calcular_plano(tarefas, ocupado, prefs, agora, horizonte_fim):
             continue
 
         restante = tarefa.esforco
-        fim_busca = min(deadline_efetiva, horizonte_fim)
+
+        # TARDE + prazo além do horizonte: NÃO agenda agora.
+        #
+        # Sem isto, a tarefa ancora no fim do HORIZONTE em vez de no prazo — e o
+        # resultado reproduz o bug que a estratégia existe para resolver. Medido
+        # nos dados reais em 15/08/2026: com horizonte de 92 dias (teto 15/11),
+        # o estudo de uma prova de 10/12 caía em 09/11, um mês antes.
+        #
+        # "O mais tarde possível" e "o mais tarde que este horizonte alcança" não
+        # são a mesma coisa, e entregar a segunda calada é pior que não entregar:
+        # o usuário veria sessões plausíveis na data errada. Cai em `nao_alocado`
+        # com motivo próprio, e entra sozinha no plano quando o prazo se
+        # aproximar. CEDO não passa por aqui — para ela, cedo é o que se quer.
+        if tarefa.estrategia == TARDE and deadline_efetiva > horizonte_fim:
+            nao_alocado.append(
+                NaoAlocado(
+                    tarefa.id,
+                    tarefa.titulo,
+                    restante,
+                    "prazo além do horizonte do plano; será agendada mais perto da data",
+                )
+            )
+            continue
+
+        inicio_busca, fim_busca = _limites_duros(
+            tarefa, agora, deadline_efetiva, horizonte_fim, tz
+        )
+        if fim_busca <= inicio_busca:
+            # Os limites duros da própria tarefa não deixam janela nenhuma. É
+            # falha de pedido, não de espaço — e por serem duros, nenhum nível
+            # de relaxamento mudaria isso. Sai com motivo próprio.
+            nao_alocado.append(
+                NaoAlocado(
+                    tarefa.id,
+                    tarefa.titulo,
+                    restante,
+                    "janela vazia entre nao_antes_de/nao_depois_de e a deadline",
+                )
+            )
+            continue
+
         for nivel in NIVEIS:
             if restante <= 0:
                 break
             pn = _prefs_do_nivel(prefs, nivel)
-            slots = slots_livres(agora, fim_busca, pn, prefs.granularidade, ocupado)
+            slots = slots_livres(
+                inicio_busca,
+                fim_busca,
+                pn,
+                prefs.granularidade,
+                ocupado,
+                _restricao_da_tarefa(tarefa, nivel),
+            )
             restante = _alocar(
                 tarefa,
                 restante,
@@ -429,8 +611,19 @@ def _alocar(
     min_total_dia,
     tz,
 ):
-    """Encaixa sessões da tarefa nos slots (cronológico). Devolve o que sobrou."""
-    for s_ini, s_fim in slots:
+    """Encaixa sessões da tarefa nos slots. Devolve o que sobrou.
+
+    A ÚNICA diferença entre as estratégias é a ordem em que os slots são
+    consultados (`_ordem_de_varredura`): CEDO começa pelos primeiros dias, TARDE
+    pelos últimos. Dentro do dia, as duas preenchem igual e ancoram no início do
+    slot — a estratégia escolhe o DIA, nunca o horário.
+
+    Tetos diários, `sessao_min/max` e o relaxamento independem da ordem (os
+    tetos são dicionários por dia). Um slot nunca cruza a meia-noite
+    (`slots_livres` monta dia a dia), então a data do teto é sempre a do slot.
+    """
+    tarde = tarefa.estrategia == TARDE
+    for s_ini, s_fim in _ordem_de_varredura(slots, tarde, tz):
         if restante <= 0:
             break
         dia = timezone.localtime(s_ini, tz).date()
@@ -457,11 +650,12 @@ def _alocar(
         if dur < min(pn.sessao_min, restante):
             continue
 
+        inicio = s_ini
         fim = s_ini + timedelta(minutes=dur)
         sessoes.append(
-            Sessao(tarefa.id, tarefa.titulo, tarefa.classe_id, s_ini, fim, dur)
+            Sessao(tarefa.id, tarefa.titulo, tarefa.classe_id, inicio, fim, dur)
         )
-        ocupado.append((s_ini, fim))
+        ocupado.append((inicio, fim))
         ocupado[:] = _mesclar(ocupado)
         min_tarefa_dia[(tarefa.id, dia)] = min_tarefa_dia.get((tarefa.id, dia), 0) + dur
         min_total_dia[dia] = min_total_dia.get(dia, 0) + dur
@@ -624,6 +818,34 @@ def montar_plano(
                 prioridade=prioridades.get(tid),
                 buffer_dias=aj.get("buffer_dias", 0) or 0,
                 max_min_por_dia=aj.get("max_min_por_dia"),
+                # Parâmetros da própria tarefa (Fase 1.1). Acesso direto (sem
+                # getattr defensivo) de propósito — quem montar um objeto de
+                # tarefa sem estes campos deve quebrar alto, não perder o
+                # parâmetro em silêncio.
+                #
+                # A diretriz da IA (PR C, lida da `descricao`) só PREENCHE o que
+                # a tarefa deixou nulo; nunca sobrescreve. A camada de texto
+                # livre é tradutora para a camada estruturada, não um canal
+                # paralelo: uma leitura errada pode acrescentar uma condição
+                # — e ela é sempre reportada —, mas não pode desfazer o que
+                # alguém disse explicitamente.
+                estrategia=t.estrategia or aj.get("estrategia"),
+                nao_antes_de=t.nao_antes_de or _data_ia(aj.get("nao_antes_de")),
+                nao_depois_de=t.nao_depois_de or _data_ia(aj.get("nao_depois_de")),
+                janela_inicio_min=_time_para_min(t.janela_inicio)
+                or _hhmm_ia(aj.get("janela_inicio")),
+                janela_fim_min=_time_para_min(t.janela_fim)
+                or _hhmm_ia(aj.get("janela_fim")),
+                dias_permitidos=(
+                    frozenset(t.dias_permitidos)
+                    if t.dias_permitidos
+                    else (
+                        frozenset(aj["dias_permitidos"])
+                        if aj.get("dias_permitidos")
+                        else None
+                    )
+                ),
+                descricao=t.descricao or "",
             )
         )
 

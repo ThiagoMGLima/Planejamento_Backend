@@ -70,19 +70,42 @@ def construir_contexto(res):
         capacidade_livre[te.id] = _minutos_livres(
             agora, fim, pn_base, res.prefs.granularidade, res.ocupado
         )
-        tarefas.append(
-            {
-                "id": te.id,
-                "titulo": te.titulo,
-                "classe": te.classe_id,
-                "deadline": te.deadline.isoformat(),
-                "esforco_min": te.esforco,
-                "alocado_min": alocado.get(te.id, 0),
-                "restante_min": restante.get(te.id, 0),
-                "sessoes": sessoes_por_tarefa.get(te.id, 0),
-                "dias_usados": sorted(dias_por_tarefa.get(te.id, set())),
+        item = {
+            "id": te.id,
+            "titulo": te.titulo,
+            "classe": te.classe_id,
+            "deadline": te.deadline.isoformat(),
+            "esforco_min": te.esforco,
+            "alocado_min": alocado.get(te.id, 0),
+            "restante_min": restante.get(te.id, 0),
+            "sessoes": sessoes_por_tarefa.get(te.id, 0),
+            "dias_usados": sorted(dias_por_tarefa.get(te.id, set())),
+        }
+        # Camada de texto livre (PR C). Só entra quando há texto — payload menor
+        # e, sem descrição, não há o que interpretar.
+        if (te.descricao or "").strip():
+            item["observacao_do_usuario"] = te.descricao.strip()
+        # O que JÁ está definido na tarefa. Vai junto para a IA não propor o que
+        # já vale (e não gastar uma das 3 perguntas com isso): o campo explícito
+        # vence a diretriz, então repetir seria ruído.
+        definidos = {
+            k: v
+            for k, v in (
+                ("estrategia", te.estrategia),
+                ("nao_antes_de", te.nao_antes_de),
+                ("nao_depois_de", te.nao_depois_de),
+                ("dias_permitidos", sorted(te.dias_permitidos or ()) or None),
+            )
+            if v
+        }
+        if te.janela_inicio_min is not None and te.janela_fim_min is not None:
+            definidos["janela"] = [te.janela_inicio_min, te.janela_fim_min]
+        if definidos:
+            item["ja_definido"] = {
+                k: (v.isoformat() if hasattr(v, "isoformat") else v)
+                for k, v in definidos.items()
             }
-        )
+        tarefas.append(item)
 
     cargas = list(carga_por_dia.values())
     carga_resumo = {
@@ -140,6 +163,19 @@ SYSTEM_PROMPT = (
     "prioridades (1 a 5); por tarefa, buffer_dias (terminar com folga antes do "
     "prazo) e max_min_por_dia (reduza-o para espalhar AQUELA tarefa por mais "
     "dias); e max_min_por_dia_total (teto de minutos por dia somando TODAS as "
+    "OBSERVAÇÃO DO USUÁRIO: quando uma tarefa traz 'observacao_do_usuario', leia "
+    "esse texto e traduza o que ele disser sobre QUANDO fazer a tarefa para os "
+    "campos de 'ajustes_por_tarefa': estrategia ('TARDE' quando o valor está em "
+    "fazer perto do prazo, como estudar para prova; 'CEDO' quando quanto antes "
+    "melhor), janela_inicio/janela_fim ('HH:MM', ex.: só de manhã ⇒ 08:00–12:00), "
+    "dias_permitidos (0=segunda … 6=domingo), nao_antes_de/nao_depois_de (datas "
+    "ISO). Traduza SOMENTE o que o texto disser — não invente condição que não "
+    "está escrita, e ignore o que não for sobre quando fazer. Se a tarefa traz "
+    "'ja_definido', aquilo já vale: não repita nem contrarie. "
+    "PERGUNTAS: quando o texto sugerir uma condição mas você não tiver certeza, "
+    "em vez de aplicar, devolva um item em 'perguntas' "
+    "({tarefa_id, knob, valor, impacto}) — no máximo 3, impacto maior primeiro. "
+    "Não escreva o texto da pergunta: o sistema o redige. "
     "tarefas — use para derrubar os picos de carga diária). Só aperte os limites "
     "enquanto os prazos ainda couberem; o sistema afrouxa sozinho o que não couber. "
     "Por fim, explique de forma objetiva e factual a estratégia, os trade-offs e "
@@ -169,10 +205,33 @@ SCHEMA_MELHORIA = {
                         "properties": {
                             "buffer_dias": {"type": "integer"},
                             "max_min_por_dia": {"type": "integer"},
+                            # Traduzidos da observacao_do_usuario (PR C).
+                            "estrategia": {"type": "string"},
+                            "nao_antes_de": {"type": "string"},
+                            "nao_depois_de": {"type": "string"},
+                            "janela_inicio": {"type": "string"},
+                            "janela_fim": {"type": "string"},
+                            "dias_permitidos": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                            },
                         },
                     },
                 },
                 "max_min_por_dia_total": {"type": "integer"},
+            },
+        },
+        # O modelo escolhe o quê perguntar; a redação é do código (D5 + §3.5).
+        "perguntas": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "tarefa_id": {"type": "string"},
+                    "knob": {"type": "string"},
+                    "valor": {},
+                    "impacto": {"type": "integer"},
+                },
             },
         },
         "resumo": {"type": "string"},
@@ -264,6 +323,137 @@ def _data_no_horizonte(valor, agora, horizonte_fim):
     return d
 
 
+# Knobs de agendamento que a IA pode inferir da `descricao` (PR C). São os
+# mesmos campos do PR A: a camada de texto livre TRADUZ para a estruturada, não
+# inventa um vocabulário paralelo.
+KNOBS_AGENDAMENTO = (
+    "estrategia",
+    "nao_antes_de",
+    "nao_depois_de",
+    "janela_inicio",
+    "janela_fim",
+    "dias_permitidos",
+)
+
+
+def _ajustes_de_agendamento(aj, agora, horizonte_fim):
+    """Sub-guarda dos knobs do PR A dentro de `ajustes_por_tarefa`.
+
+    Cada knob é validado isoladamente (princípio da ortogonalidade) e o inválido
+    simplesmente some. A única checagem CRUZADA é o par de datas contraditório:
+    aceitar `nao_antes_de > nao_depois_de` produziria janela vazia e a tarefa
+    cairia inteira em `nao_alocado` — pior que ignorar a leitura.
+    """
+    limpo = {}
+
+    estrategia = aj.get("estrategia")
+    if estrategia in ("CEDO", "TARDE"):
+        limpo["estrategia"] = estrategia
+
+    antes = _data_no_horizonte(aj.get("nao_antes_de"), agora, horizonte_fim)
+    depois = _data_no_horizonte(aj.get("nao_depois_de"), agora, horizonte_fim)
+    if antes and depois and antes > depois:
+        antes = depois = None  # par contraditório: descarta os dois
+    if antes:
+        limpo["nao_antes_de"] = antes.isoformat()
+    if depois:
+        limpo["nao_depois_de"] = depois.isoformat()
+
+    ini = _hhmm_como_min(aj.get("janela_inicio"))
+    fim = _hhmm_como_min(aj.get("janela_fim"))
+    if (
+        ini is not None
+        and fim is not None
+        and _JANELA_DIA_MIN <= ini < fim <= _JANELA_DIA_MAX
+    ):
+        limpo["janela_inicio"] = aj["janela_inicio"]
+        limpo["janela_fim"] = aj["janela_fim"]
+
+    dias = aj.get("dias_permitidos")
+    if isinstance(dias, (list, tuple)):
+        validos = []
+        for d in dias:
+            n = _como_int(d)
+            if n is not None and 0 <= n <= 6 and n not in validos:
+                validos.append(n)
+        # Lista vazia proibiria todo dia; a completa não restringe nada.
+        if validos and len(validos) < 7:
+            limpo["dias_permitidos"] = sorted(validos)
+
+    return limpo
+
+
+def validar_perguntas(bruto, tarefas_validas, agora=None, horizonte_fim=None):
+    """Perguntas que o plano devolve ao usuário — no máximo 3, por impacto (D5).
+
+    O modelo escolhe a tarefa, o knob e o valor; **o texto é escrito pelo
+    código** (`services/vocabulario`), então nenhuma redação do LLM chega ao
+    usuário. Pergunta cujo knob não renderiza frase é descartada: sem texto não
+    há pergunta.
+
+    Cada pergunta carrega o `valor` já validado — é o que o front devolve se o
+    usuário disser "sim", e vira campo da tarefa (camada A). Assim a mesma
+    pergunta não volta no plano seguinte.
+    """
+    from . import vocabulario
+
+    por_id = {te.id: te for te in tarefas_validas}
+    candidatas = []
+    for item in bruto if isinstance(bruto, (list, tuple)) else []:
+        if not isinstance(item, dict):
+            continue
+        tarefa = por_id.get(str(item.get("tarefa_id")))
+        knob = item.get("knob")
+        if tarefa is None or knob not in KNOBS_AGENDAMENTO:
+            continue
+        # Reusa o guarda-corpo dos ajustes: uma pergunta não pode propor um
+        # valor que seria recusado se viesse como diretriz.
+        validado = _ajustes_de_agendamento(
+            {knob: item.get("valor")}, agora, horizonte_fim
+        )
+        if knob not in validado:
+            continue
+        texto = vocabulario.pergunta(tarefa.titulo, knob, validado[knob])
+        if not texto:
+            continue
+        candidatas.append(
+            {
+                "tarefa_id": tarefa.id,
+                "knob": knob,
+                "valor": validado[knob],
+                "texto": texto,
+                "impacto": _como_int(item.get("impacto")) or 0,
+            }
+        )
+
+    candidatas.sort(key=lambda p: -p["impacto"])
+    return candidatas[:3]
+
+
+def leitura_das_descricoes(tarefas_validas, ajustes):
+    """O que a IA extraiu de cada `descricao` — SEMPRE reportado (decisão D3).
+
+    Reusar `descricao` (campo visível e editável) em vez de criar um campo
+    oculto só é aceitável porque isto existe: sem o relato, uma leitura errada
+    viraria mudança silenciosa de agenda. Tarefa com descrição e nenhum knob
+    inferido aparece com `entendi: []` — "li e não tirei nada" é informação.
+    """
+    from . import vocabulario
+
+    saida = []
+    for te in tarefas_validas:
+        if not (te.descricao or "").strip():
+            continue
+        saida.append(
+            {
+                "tarefa_id": te.id,
+                "tarefa": te.titulo,
+                "entendi": vocabulario.descrever(ajustes.get(te.id, {})),
+            }
+        )
+    return saida
+
+
 def validar_diretrizes(bruto, tarefas_validas, agora=None, horizonte_fim=None):
     """Limpa as diretrizes da IA contra as tarefas reais (ver §4.3).
 
@@ -309,6 +499,7 @@ def validar_diretrizes(bruto, tarefas_validas, agora=None, horizonte_fim=None):
         max_dia = _como_int(aj.get("max_min_por_dia"))
         if max_dia is not None and max_dia >= 1:
             limpo["max_min_por_dia"] = max_dia
+        limpo.update(_ajustes_de_agendamento(aj, agora, horizonte_fim))
         if limpo:
             ajustes[tid] = limpo
 

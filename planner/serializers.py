@@ -10,7 +10,7 @@ import re
 from rest_framework import serializers
 
 from .models import Classe, Evento, RegraRecorrencia, Tarefa
-from .services import perfis
+from .services import perfis, tarefas
 from .services.planejamento import HORIZONTES
 
 COR_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -75,11 +75,43 @@ class TarefaSerializer(serializers.ModelSerializer):
             "deadline",
             "esforco_estimado",
             "status",
+            # Parâmetros de agendamento (Fase 1.1). Saem na API de propósito
+            # (decisão D4): "oculto" aqui significa "o usuário não digita", não
+            # "segredo" — o frontend simplesmente não os mapeia, e o agente/MCP
+            # os alcançam pelo caminho normal.
+            "estrategia",
+            "nao_antes_de",
+            "nao_depois_de",
+            "janela_inicio",
+            "janela_fim",
+            "dias_permitidos",
             "criado_em",
             "atualizado_em",
         ]
         # status é controlado pela máquina de estados (promover), não pelo cliente.
         read_only_fields = ["id", "status", "criado_em", "atualizado_em"]
+
+    def validate(self, attrs):
+        """Coerência dos parâmetros de agendamento — delegada ao service.
+
+        A regra mora em `services/tarefas.validar_parametros_agendamento`, e não
+        aqui, porque a API e a ferramenta do agente escrevem os mesmos campos por
+        caminhos diferentes: regra duplicada é regra que diverge.
+
+        Valida o estado **efetivo** (o que já está na instância, coberto pelo que
+        está sendo enviado) — num PATCH parcial, validar só o delta deixaria
+        passar combinação inválida formada com o que já estava lá.
+        """
+        atual = getattr(self, "instance", None)
+        efetivo = {
+            campo: (attrs[campo] if campo in attrs else getattr(atual, campo, None))
+            for campo in tarefas.CAMPOS_ATUALIZAVEIS
+        }
+        try:
+            tarefas.validar_parametros_agendamento(efetivo)
+        except tarefas.ParametrosInvalidos as e:
+            raise serializers.ValidationError(e.erros)
+        return attrs
 
 
 class RegraRecorrenciaSerializer(serializers.ModelSerializer):

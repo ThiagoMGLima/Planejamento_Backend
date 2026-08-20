@@ -1,4 +1,4 @@
-# Handoff — estado real em 08/08/2026
+# Handoff — estado real em 19/08/2026
 
 > **Leia isto antes de tocar em qualquer coisa.** O `CLAUDE.md` descreve o projeto; este
 > arquivo descreve **o que está fora dele**: configuração local desta máquina, recursos
@@ -10,69 +10,123 @@
 
 ## 1. Onde está o trabalho recente
 
-A 0A.1 e a 0A.3 **estão commitadas**, em duas branches empilhadas — ainda **não
-mergeadas no `main`**. Confirme com `git log --oneline main..HEAD` antes de supor que o
-`main` já tem `services/llm.py` ou `services/telemetria.py`.
+**Os PRs #24 e #25 (0A.1 e 0A.3) foram mergeados** — `origin/main` está em `82d6537`,
+que é o merge do #25. O texto anterior desta seção dizia que estavam pendentes; não
+estão mais.
 
-| Branch | PR | Base | Conteúdo |
-| --- | --- | --- | --- |
-| `claude/0a1-llmprovider` | **#24** | `main` (`b660ef9`) | **0A.1** — `services/llm.py`, providers Ollama/Anthropic/Mock por `LLM_PROVIDER` |
-| `claude/0a3-instrumentacao` | **#25** | `claude/0a1-llmprovider` | **0A.3** — `services/telemetria.py` + a instrumentação das 4 famílias, e um commit de docs de estado (este arquivo, o plano do Supabase, a 0A.6) |
+As **seis tasks acumuladas viraram o PR #26** em 19/08/2026, assumido como PR de
+acumulado (1.1 A/B/C/C2 e 1.2 A/B). **Daqui em diante volta a valer 1 task = 1 PR**, em
+branch própria.
 
-**As duas são empilhadas de propósito:** a 0A.3 instrumenta `llm.gerar_json`, então não
-compila sem a 0A.1. Mergear na ordem — **#24 primeiro**; o #25 tem base no #24, e o
-diff dele encolhe sozinho quando o #24 entrar.
+| | |
+| --- | --- |
+| Branch | `claude/fase1-pra-parametros-tarefa` → `origin` |
+| PR | **#26**, aberto contra `main` |
+| Commits à frente de `origin/main` | 17 |
 
-As duas tasks foram desenvolvidas juntas, numa árvore só, e **separadas depois**. O
-estado intermediário (0A.1 sem a 0A.3) foi verificado de verdade antes de virar commit:
-285 testes, `ruff`, `black --check` e `makemigrations --check`. O topo da pilha fecha em
-**296 testes**, com a mesma verificação.
+O nome da branch descreve só a primeira das seis tasks — é resquício de quando ela
+acumulou. Não repita: **branch nova por task**.
 
-O **frontend** (`../../Frontend/Planejamento_Frontend/`) tem mudanças sem commit, de
-trabalho anterior não relacionado a estas tasks.
+Também segue não-mergeada a branch remota `claude/0b-perfil-dono-e-escopo`. O **código**
+do PR1 chegou ao `main` por outro caminho, mas **um commit ficou de fora**: `e3f8a45`,
+só de docs, que carregava dois itens de backlog. Ambos foram recuperados em 19/08/2026 e
+estão agora no `ROADMAP.md` — o do comparador de cenários (`MAX_CENARIOS` conta a base)
+em "Backlog anotado", e o aviso de que **o PR2 tem metade de frontend** no item 0B.2.
+Não há mais nada a resgatar dali.
+
+O **frontend** (`../../frontend/Planejamento_Frontend/`, branch `main`) tem
+`package.json` e `package-lock.json` modificados sem commit, de trabalho anterior não
+relacionado a estas tasks.
 
 ## 2. Configuração local desta máquina
 
 Nada disto está versionado. Um agente que assumir aqui precisa saber.
 
-### Portas — bloco 842x
+> ⚠️ **O projeto mudou de máquina.** Até 08/08/2026 este arquivo descrevia um notebook
+> Intel Iris Xe, com `docker-compose.override.yml` remapeando portas para o bloco 842x
+> e rodando `qwen2.5:3b-instruct` em CPU. **Nada disso vale aqui.** O trabalho de
+> 14/08 em diante acontece no desktop descrito abaixo. Se você leu "portas 8420/8421"
+> ou "modelo 3b" em algum contexto antigo, era a outra máquina.
 
-O `docker-compose.override.yml` (gitignorado, presente) remapeia as portas porque **8000 e
-8765 são disputadas por outros projetos desta máquina** (o backend do ProjMed ocupa a
-8000 com `manage.py runserver`).
+### Esta máquina (desktop) — o compose versionado roda sem override
 
-| Serviço | Padrão do repo | Nesta máquina |
-| --- | --- | --- |
-| API | 8000 | **8420** |
-| MCP | 8765 | **8421** |
-| Frontend (Vite) | 5173 | 5173 (inalterado) |
+**Não existe `docker-compose.override.yml` aqui, e não é preciso.** A configuração
+ROCm e as portas padrão do `docker-compose.yml` versionado funcionam como estão,
+porque este desktop é exatamente a máquina para a qual ele foi escrito.
 
-Dentro da rede do compose nada muda (`web:8000`, `mcp:8765`). O `.env` do frontend aponta
-para `http://localhost:8420/api/v1`. Cliente MCP:
-`claude mcp add --transport http planejador http://localhost:8421/mcp`.
+| | |
+| --- | --- |
+| GPU | Radeon **RX 7600** (gfx1102), `/dev/kfd` presente, grupo `render` gid 990 |
+| Imagem do Ollama | `ollama/ollama:rocm` (a do compose versionado), `HSA_OVERRIDE_GFX_VERSION=11.0.0` |
+| Modelo | `qwen2.5:7b-instruct` — o default do repo, **não** o 3b |
+| API | **8000** (padrão) |
+| MCP | **8765** (padrão) |
+| Frontend (Vite) | 5173 |
 
-O mesmo override também troca o Ollama para a **imagem de CPU**: esta máquina é Intel
-Iris Xe, não tem `/dev/kfd`, e o `docker-compose.yml` versionado assume a RX 7600 via
-ROCm. Sem o override a stack inteira trava, porque o `web` depende do `ollama`.
+Cliente MCP: `claude mcp add --transport http planejador http://localhost:8765/mcp`.
 
-### Modelo de IA
+**Desempenho medido aqui:** ~46,5–46,8 tok/s por chamada do agente (telemetria da
+0A.3, 15/08/2026), contra os ~15–17 tok/s do 3b em CPU na máquina antiga. **Teto de
+VRAM: 8176 MiB** — o 7b Q4 (4,7 GB) cabe; um 14b Q4 (~9 GB) derrama para a CPU e perde
+os 47 tok/s. Subir de modelo localmente exige trocar de placa.
 
-`OLLAMA_MODEL=qwen2.5:3b-instruct` (não o 7b do default), em CPU. Medido em 08/08/2026
-com o modelo quente: **~15–17 tok/s**. Essa é a linha de base da 0A.5 e da 0A.6.
+**Consequência para a 0A.6** (IA remota na LAN): ela foi adiada em 08/08 "por falta de
+hardware em mãos", e **metade dessa premissa caiu** — o desktop com a RX 7600 é esta
+máquina. O que ainda falta é o host sempre-ligado (o Raspberry Pi) e, pelo princípio 9,
+o PR2: servir a API na LAN sem autenticação nenhuma não é opção.
 
-### Dados
+### Nome do projeto compose e o volume de dados — cuidado real
 
-**O banco foi zerado a pedido do usuário em 08/08/2026.** Foram apagados 23 tarefas,
-28 eventos, 3 ocorrências, 8 regras de recorrência e 15 registros de execução.
+O projeto compose é `planejamento_backend`, derivado do nome do diretório. Existe uma
+**cópia antiga e não-git** em `~/Documents/Projetos/planejamento/backend/Planejamento_Backend`
+com o mesmo nome de diretório, logo o **mesmo projeto compose** — os volumes
+`planejamento_backend_pgdata` (os dados reais do usuário) e
+`planejamento_backend_ollama_models` são compartilhados entre as duas cópias. Foi o que
+preservou os dados ao subir o clone novo.
 
-Mantidos de propósito: as **5 classes padrão**, o **feriado de Curitiba** e o **perfil
-local**. Não são dados de demonstração — `Evento.classe` é FK obrigatória, e sem classe
-nenhuma o app não permite criar nada.
+- **Suba sempre a partir de `Projetos/Planner/backend/Planejamento_Backend`.**
+- **Nunca rode `docker compose` a partir da cópia antiga**, e **nunca `down -v`.**
+- Se o diretório for renomeado um dia, fixe `COMPOSE_PROJECT_NAME=planejamento_backend`
+  para não órfãozar o volume.
+
+### Dados — o usuário está usando o sistema de verdade
+
+O banco foi zerado em 08/08/2026, e **desde então encheu de uso real**. Estado
+conferido em **19/08/2026**:
+
+| | |
+| --- | --- |
+| Perfis | 1 (o local) |
+| Tarefas | **41** — 9 com `estrategia=TARDE`, **32 sem estratégia nenhuma** |
+| Eventos | **166**, dos quais **92 são blocos de estudo já promovidos** |
+| Regras de recorrência | 7 |
+| Ocorrências | 1 |
+| Classes | 6 — as 5 padrão + `Academia`, criada pelo usuário |
+
+Composição dos eventos por classe: `Aula` 62 (58 **avulsos**, 4 recorrentes), `Trabalho`
+47 (46 avulsos), `Estudar` 46 (todos avulsos, são blocos promovidos), `Prova` 9 (todos
+avulsos), `Academia` 2 (recorrentes).
+
+Os **58 avulsos de `Aula` + 9 de `Prova`** são exatamente o que a Fase 1.2 existe para
+consertar: são as 3 disciplinas cujo PDF de planejamento de ensino foi lançado à mão,
+data por data, em vez de série recorrente. **Não os apague à mão** — quem faz isso é o
+`importar_planejamento_ensino --substituir` no PR C, e há um backup antes
+(`backup-planejador-20260818-1825.sql`, na raiz de `Projetos/Planner/`).
 
 Seeds (`seed_demo`, `seed_planejamento`) **só rodam por comando**; nada os dispara no
-boot. O que roda em banco novo são as migrations `0002` (classes) e `0006` (feriado), uma
-vez só. **O usuário está usando o sistema de verdade a partir de agora** — não rode seed
-sem pedir.
+boot. **Não rode seed sem pedir** — não há mais banco vazio para semear.
+
+**A grade do semestre 2026/2** (7 disciplinas da UTFPR, 18/08 a 17/12, sexta livre,
+academia 3×/semana, reunião AVMMED quarta 19:15) é o dado por trás desses números. Os
+PDFs de planejamento de ensino estão em `../../aulas/` (só ASL, EG1 e Redes; as outras
+4 ainda vêm).
+
+### Uma inconsistência inócua no `.env`
+
+`AGENTE_PROVIDER=ollama`, mas `AGENTE_MODEL=claude-opus-4-8`. **Não quebra nada**:
+`AGENTE_MODEL` só é lido pelo provider Anthropic (`agente.py`, `_chamar`), então com o
+provider em `ollama` a variável fica inerte. Vale saber antes de gastar tempo achando
+que o agente está falando com a Anthropic — não está.
 
 ## 3. Supabase — já provisionado
 
@@ -107,23 +161,25 @@ Usuário de teste criado: `sub` `467dee6c-698f-485f-94d1-2068b3922d14`
 
 ## 4. Onde o trabalho parou
 
-**0A.3 fechou os passos 1–8 do ciclo**, e o passo 9 (PR) está em curso — sem gate de
-frontend, porque não houve mudança de contrato HTTP (decisão Q9). O prompt de sincronia
-do passo 8 é "nada a fazer no frontend": as mudanças de assinatura foram todas internas a
-`services/`, sem endpoint, campo ou comportamento novo.
+**A Fase 1.2 / PR A fechou os passos 1–8 do ciclo** em 18/08/2026 (commit `d3e06a5`),
+com árvore limpa e suíte verde. O passo 9 (prompt de sincronia) é "nada a fazer no
+frontend", e com razão registrada: o PR não acrescentou campo nenhum ao payload —
+`titulo`, `descricao` e `classe` já existiam e passam a vir com outro valor em algumas
+ocorrências. O passo 10 (PR) não aconteceu, junto com os das quatro tasks anteriores
+(ver §1).
 
-Duas frentes disponíveis, sem dependência entre si:
+**A próxima task é o PR B da 1.2** (`importar_planejamento_ensino`), cujo gate já foi
+respondido. O detalhe do que fazer está em `docs/tasks/README.md`.
 
-- **0B / PR2** — a espinha. Pré-requisito externo cumprido; falta o plano de
-  implementação e o código. Ver a seção "Consequências no backend" do plano do Supabase,
-  que já lista dependência (`PyJWT[crypto]`), cache de JWKS com refetch por `kid`
-  desconhecido, claims a validar e a credencial de serviço do MCP herdada do PR1.
-- **0A.5** — matriz 3b × 7b. Destravada pela 0A.3 e **melhora quanto mais tempo passar**:
-  a telemetria acumula a cada uso real. É o único item que rende esperando.
+**A decisão que continua aberta é de ordem, não de conteúdo:** fechar a 1.2 (PR B → PR
+C) ou voltar para o **PR2 da Fase 0B**. O PR2 **não está mais bloqueado** — o
+pré-requisito externo foi cumprido em 08/08 (§3 abaixo) — e está parado por falta do
+plano de implementação, não de terceiro. Os argumentos dos dois lados estão na seção
+"Decisões em aberto" do `ROADMAP.md`.
 
 **Trade-off que o usuário conhece e ainda não decidiu:** o PR2 põe o uso pessoal dele
-atrás de um login que depende de internet. Ele começou a usar o sistema para se planejar
-de verdade. Adiar o PR2 em favor da 0A.2/0A.5 é escolha legítima — está registrado nos
+atrás de um login que depende de internet, e ele está usando o sistema de verdade,
+todo dia, com o semestre em curso. Adiar o PR2 é escolha legítima — está registrado nos
 riscos do plano do Supabase.
 
 ## 5. Coisas que já custaram investigação
@@ -137,6 +193,11 @@ Não repita:
   desligando; se você adicionar teste que exercite `llm.gerar_json`, não a contorne.
 - **`.telemetria/llm.jsonl` é escrito como root** pelo container. Apagar com
   `docker compose exec web rm -rf /app/.telemetria`.
+- **Modificar um queryset descarta o `prefetch_related` dele.** Achado no PR A da 1.2:
+  `evento.ocorrencias.select_related(...)` dentro de `expandir` ignorava o cache de quem
+  montou a query e virava 1 query por evento recorrente. A saída foi
+  `recurrence.prefetch_ocorrencias()` — um `Prefetch` com o `select_related` dentro. **Vai
+  chamar `expandir`? use o helper**; é o que mantém a janela em 4 queries, constante.
 - **`!reset` em override de compose** é obrigatório para *substituir* lista em vez de
   concatenar. Vale para `devices`, `group_add` e `ports`. Para remover um serviço inteiro:
   `ollama: !reset null` — testado, funciona, e exige soltar o `depends_on` de quem
