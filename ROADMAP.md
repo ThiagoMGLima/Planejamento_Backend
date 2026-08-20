@@ -39,7 +39,8 @@
    Corolário: **UUID difícil de adivinhar não é fronteira**, é obscuridade. Se a única
    coisa entre um usuário e o dado de outro é não saber o id, não há isolamento.
 
-**Legenda:** ✅ feito · 🔜 próximo/ativo · ⏳ depois · 💡 decisão em aberto
+**Legenda:** ✅ feito · 🔜 próximo/ativo · ⏸️ parado (não bloqueado) · ⏳ depois ·
+💡 decisão em aberto
 
 > **Este arquivo é o mapa do que falta.** Para o que **já está construído** — com os
 > arquivos onde cada coisa mora, e a lista do que ainda não existe — veja
@@ -47,44 +48,70 @@
 
 ---
 
-## Método de trabalho (por task)
+## Onde estamos (19/08/2026)
 
-Cada item deste ROADMAP percorre o mesmo ciclo. **1 task = 1 PR** (refina a
-convenção "1 marco = 1 PR" do `CLAUDE.md`):
+**Duas fases correm em paralelo, e é de propósito** — a Fase 1 sempre foi declarada
+paralela à Fase 0. O que mudou é que o trabalho real está todo na Fase 1 há duas
+semanas, e vale dizer isso na cara em vez de deixar deduzir.
 
-1. **Task** — pegar o próximo item na ordem definida abaixo.
-2. **Análise do código atual** — mapear o que a task toca de verdade (arquivos,
-   models, testes, efeitos colaterais) antes de propor qualquer coisa.
-3. **Plano de implementação** — nota de design em `docs/tasks/`, com as dúvidas
-   e decisões em aberto explicitadas.
-4. **Revisão + sanar dúvidas** — o plano é revisado e as dúvidas resolvidas
-   **juntos, antes de escrever código**. Nada de implementar sobre premissa não
-   confirmada.
-5. **Implementação.**
-6. **Testes automatizados** — suíte + lint + checagem de migrations verdes (ver
-   `CLAUDE.md`). Se a suíte não cobre a mudança por inteiro, **o agente escreve os
-   testes que faltam**; nada que possa virar `pytest` volta para o usuário.
-7. **Roteiro de teste humano — no chat** (arquivo só se for grande demais) — só o
-   que exige um humano: interface, julgamento de produto ("é vivível?"), qualidade
-   subjetiva de texto de IA e decisões sobre dado real. Para cada item: o que fazer,
-   o que observar e o que seria sinal de problema. Detalhe em `CLAUDE.md`,
-   "Passos 6–7".
-8. **Documento de contexto** em `docs/tasks/contexto-<task>.md` — o que era para
-   fazer, o que foi feito, decisões, bugs encontrados e como corrigidos, e o estado
-   em que a próxima task começa. **O contexto do agente é zerado entre tasks**, então
-   este documento é o único fio. Índice em `docs/tasks/README.md`.
-9. **Prompt de sincronia com o frontend** — o frontend é um repo **vizinho**
-   (`../../Frontend/Planejamento_Frontend/`) que consome esta API. Produza um prompt,
-   para o usuário repassar ao agente do frontend, com as mudanças de contrato de forma
-   acionável (ou a confirmação de que não há nenhuma, com o porquê). Detalhe em
-   `CLAUDE.md`, "Passos 9–10".
-10. **PR — gated no frontend.** Só depois que o usuário aplicar as mudanças no
-    frontend, rodar os **testes end-to-end** lá e confirmar que está tudo verde.
-11. Se tudo ok → **próxima task**.
+| Fase | Estado real |
+| --- | --- |
+| **0A** — provider + empacotamento | 0A.1 ✅ e 0A.3 ✅. **0A.2, 0A.4, 0A.5, 0A.6 ⏳** |
+| **0B** — contas | PR0 ✅, PR1 ✅. **PR2 ⏸️ parado desde 08/08** (desbloqueado, falta o plano). PR3 ⏳ |
+| **1.1** — parâmetros por tarefa | PRs A, B, C, C2 ✅. **PR D ⏸️** travado nas decisões D6/D7 |
+| **1.2** — conteúdo por ocorrência | PR A ✅, PR B ✅. **PR C 🔜 próxima task**, D ⏳ |
+| **1.3a** — criar evento pela UI + `data_fim` obrigatório | gate respondido, **pronta para começar**. Backend + frontend, dois agentes |
+| **1.3b** — vocabulário e distinção visual | ⏳ depois da 1.3a. Frontend |
+
+**Onde paramos:** fim do PR B da 1.2 (19/08/2026), ciclo completo e suíte verde (531
+testes). **Próxima task:** PR C da 1.2 — transcrever os 3 PDFs e migrar os dados. É a
+primeira da 1.2 que **muda o calendário real**.
+
+**O que a Fase 0 ainda deve, para o beta acontecer:** o PR2 (auth de verdade), o PR3
+(conta demo), a 0A.2 (profiles do compose) e a 0A.4 (launcher). Sem esses quatro não há
+o que entregar a um testador. Nenhum deles está bloqueado por terceiro.
+
+**A ordem entre as duas frentes foi decidida em 19/08/2026: fechar a 1.2 primeiro**, e
+o PR B já entrou. O registro da decisão está em "Ordem: fechar a 1.2 ou voltar para a
+Fase 0", no fim deste arquivo.
 
 ---
 
-## Fase 0 — Beta técnico com contas (Docker, não-hospedado + Supabase Auth)  🔜  *(ATIVA)*
+## Método de trabalho (por task)
+
+*Revisado em 19/08/2026. Detalhe em `CLAUDE.md` ("Convenção de trabalho"), que é a
+fonte da verdade — as skills que executam este ciclo são locais da máquina do autor e
+não fazem parte do repositório.*
+
+**1 task = 1 PR**, em três fases separadas por **dois gates humanos**:
+
+**Abrir** — 1. pegar o próximo item daqui · 2. **analisar contra o código e o banco
+real** (medir, não estimar) · 3. escrever o plano em `docs/tasks/` **ou** perguntar no
+chat · **🚦 gate 1: desenho aprovado**.
+
+> Quando escrever plano: a task mexe em **schema**, **apaga ou sobrescreve dado real**,
+> tem **mais de uma forma defensável**, ou **inverte um default**. Fora disso, vai
+> direto ao código com as dúvidas no chat. O agente escolhe e justifica; o usuário pode
+> discordar.
+
+**Fazer** — 4. implementar · 5. conferir se a suíte cobre a mudança e **escrever o que
+faltar** · 6. suíte + `ruff` + `black` + `makemigrations --check` verdes · 7.
+**verificar o que só o agente consegue verificar**: dado real em transação com
+rollback, leitura pela agenda (não pelo model), fuso, contagens.
+
+> **Se o agente consegue verificar, o agente verifica.** O usuário não roda query, não
+> conta linha, não confere fuso. Mandar ele conferir o que um teste provaria é empurrar
+> trabalho.
+
+**Fechar** — 8. relatório (o que mudou, as decisões, os números do que já foi provado)
++ **roteiro de teste humano**: o que rodar, o que era para acontecer, o que seria sinal
+de problema · **🚦 gate 2: o usuário testa backend e frontend e confirma** · 9. PR · 10.
+atualizar **todos** os contextos — `contexto-<task>.md`, `docs/tasks/README.md`, este
+arquivo, `CLAUDE.md` e, se mudou algo fora do código, o `HANDOFF.md`.
+
+---
+
+## Fase 0 — Beta técnico com contas (Docker, não-hospedado + Supabase Auth)  ⏸️  *(aberta, sem trabalho desde 08/08 — ver "Onde estamos")*
 
 Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de produto/UX,
 (b) decidir **IA local vs API** com dado real, e (c) **testar contas + segurança do Auth**.
@@ -126,8 +153,13 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   > plano completo em ~50s em **CPU pura**, com `ia_indisponivel: false`. Foi teste
   > solto — sem a instrumentação da 0A.3 e sem comparação com o 7b — mas é dado real e
   > fica aqui para não se perder.
-- **0A.6 IA remota na LAN + host sempre-ligado** ⏳ — **adiado por falta de hardware
-  em mãos (08/08/2026); retomar quando o desktop e o Raspberry Pi estiverem acessíveis.**
+- **0A.6 IA remota na LAN + host sempre-ligado** ⏳ — adiado em 08/08/2026 por falta de
+  hardware em mãos. **Metade da premissa caiu (19/08/2026): o desktop com a RX 7600
+  passou a ser a máquina de desenvolvimento** — é onde a stack roda desde 14/08, com o
+  compose versionado e sem override (ver §2 do `HANDOFF.md`). Faltam duas coisas, e a
+  segunda é dura: o **host sempre-ligado** (o Raspberry Pi, ainda não acessível) e o
+  **PR2** — pelo princípio 9, servir a API na LAN sem autenticação nenhuma não é opção,
+  e é o caveat que já estava escrito no fim deste item.
 
   A ideia é separar **onde a IA pensa** de **onde o app roda**: Ollama no desktop com a
   **RX 7600** (o `docker-compose.yml` já é escrito para exatamente essa placa —
@@ -173,7 +205,7 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 | --- | --- | --- |
 | **PR0** | **Views finas + agente em processo** (0B.9) — pré-requisito estrutural, ver abaixo | ✅ **feito** |
 | **PR1** | `Perfil` + `dono` + **default invertido** + unicidade por-dono + seed por-usuário (0B.3–0B.6, 0B.10) — enquanto não há JWT, um **perfil local default** resolve o `request.user` | ✅ **feito** |
-| **PR2** | `SupabaseJWTAuthentication` + provisionamento JIT (0B.1–0B.2) — troca só *quem* resolve o `request.user`; fica estreito porque o PR1 já isolou tudo. Herdou do PR1 a **credencial de serviço do MCP**: não há o que autenticar antes de existir autenticação | 🔜 **próxima task** — **exige o projeto Supabase criado** |
+| **PR2** | `SupabaseJWTAuthentication` + provisionamento JIT (0B.1–0B.2) — troca só *quem* resolve o `request.user`; fica estreito porque o PR1 já isolou tudo. Herdou do PR1 a **credencial de serviço do MCP**: não há o que autenticar antes de existir autenticação | ⏸️ **parado desde 08/08/2026** — o pré-requisito externo **foi cumprido** (projeto Supabase criado e assinatura verificada ponta a ponta); falta o **plano de implementação** |
 | **PR3** | Conta demo semeada + gate `pode_usar` stub (0B.7–0B.8) | depende do PR2 |
 
 > **Por que um PR0.** A análise do PR1 (`docs/tasks/fase0b-pr1-dono.md`) mostrou que
@@ -188,6 +220,12 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   frontend usa `supabase-js` só pro login e manda o JWT ao Django.
 - **0B.2 `SupabaseJWTAuthentication`** (DRF): valida o JWT (segredo/JWKS) + **provisiona
   o Perfil (JIT)** no 1º acesso.
+
+  > ⚠️ **O PR2 tem metade de frontend, e ela não é opcional.** Login via `supabase-js` +
+  > `Authorization: Bearer` em toda chamada. Como o passo 10 do ciclo só fecha com o
+  > frontend verde, **o PR2 não pode ser planejado como task só-de-backend** — o plano de
+  > implementação tem de sair já com o prompt de sincronia desenhado. (Anotado em
+  > 24/07/2026 e recuperado em 19/08/2026 de um commit que ficou fora do `main`.)
 - **0B.3 `Perfil`/`Conta`** — ✅ feito no PR1. **PK é um UUID local** e o id do Supabase
   mora em `supabase_id`, coluna à parte (decisão Q3): 8 FKs apontam para a PK, então
   trocá-la no PR2 seria reescrever 8 tabelas com dados dentro. Campos: `email`, `nome`,
@@ -294,7 +332,7 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 
 ---
 
-## Fase 1 — Dogfooding + fechar regras de negócio  🔜  *(paralela à Fase 0)*
+## Fase 1 — Dogfooding + fechar regras de negócio  🔜  *(ATIVA na prática — paralela à Fase 0)*
 
 - Usar de verdade (você + testadores) e **fechar a lista de regras de negócio a mudar**.
 - Como o `dono` já entrou (Fase 0B), mudanças de regra **sobem por cima** do schema
@@ -308,8 +346,16 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   ([contexto](docs/tasks/contexto-fase1-pra.md)), **PR B ✅**
   ([contexto](docs/tasks/contexto-fase1-prb.md)) **PR C ✅**
   ([contexto](docs/tasks/contexto-fase1-prc.md)) e **PR C2 ✅**
-  ([contexto](docs/tasks/contexto-fase1-prc2.md)); **PR D ⏳** (depende das decisões
-  D6/D7, ainda abertas).
+  ([contexto](docs/tasks/contexto-fase1-prc2.md)); **PR D ⏸️** travado nas decisões
+  **D6/D7**, que são de **produto** (mandar a agenda para uma API remota), não técnicas —
+  nenhuma quantidade de código as destrava.
+
+  > **A task entregou, mas o bug que a motivou está corrigido pela metade.** Conferido
+  > no banco real em 19/08/2026: das **41 tarefas, 9 têm `estrategia=TARDE` e 32 estão
+  > sem estratégia nenhuma**. É consequência direta da decisão D2 (não há default): quem
+  > não passou pelo `manage.py marcar_estrategia` segue sendo agendado o quanto antes.
+  > Enquanto o frontend não mostrar o campo e o modelo local não preencher, essa conta se
+  > fecha por comando, tarefa por tarefa.
 
   > ⚠️ **O PR C entrega mecanismo, não valor ainda.** Medido em 15/08/2026: o
   > `qwen2.5:7b` **ignora** a instrução de traduzir a observação do usuário —
@@ -336,9 +382,25 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
 
 - **1.2 Aula é bloco fixo; conteúdo, prova e entrega são da ocorrência** — plano
   [`fase1-aula-fixa-conteudo-por-ocorrencia.md`](docs/tasks/fase1-aula-fixa-conteudo-por-ocorrencia.md),
-  gate respondido em 18/08/2026. **PR A ✅ feito**
-  ([contexto](docs/tasks/contexto-fase1-2-pra.md)); **PR B** (importador), **PR C**
-  (transcrever os PDFs + migrar os dados) e **PR D** (edição pela UI) ⏳.
+  gate respondido em 18/08/2026. **PR A ✅** ([contexto](docs/tasks/contexto-fase1-2-pra.md))
+  e **PR B ✅** ([plano](docs/tasks/fase1-2-prb-importador.md) ·
+  [contexto](docs/tasks/contexto-fase1-2-prb.md)); **PR C 🔜 próxima task** (transcrever
+  os PDFs + migrar os dados) e **PR D** (edição pela UI) ⏳.
+
+  > **O PR B inverteu um default, e vale saber por quê.** A pergunta do gate era o que
+  > fazer com aula marcada em dia de feriado; a resposta foi "acontece". Isso não cabia
+  > com `ignorar_feriados=True`, que é o que as séries lançadas à mão usam — o flag faz
+  > a data ser pulada e a aula sumiria. Então **a série importada usa
+  > `ignorar_feriados=False` e o JSON passa a ser a autoridade sobre quais datas têm
+  > aula**: o comando pula toda data que a regra gera e o arquivo não lista. O
+  > calendário passa a bater exatamente com o planejamento de ensino, ao custo de uma
+  > data esquecida na transcrição virar "sem aula" em silêncio (por isso o relatório
+  > conta as auto-puladas).
+
+  > **O dado errado ainda está no banco.** Conferido em 19/08/2026: classe `Aula` tem 62
+  > eventos, **58 deles avulsos**; classe `Prova` tem **9, todos avulsos**. O PR A criou
+  > o *lugar* onde o conteúdo de uma data mora; quem **move** os 67 para lá é o PR C, e
+  > ele depende do importador do PR B. Até lá o calendário segue como estava.
 
   Segunda regra fechada por dogfooding: **a aula não é uma sequência de eventos
   avulsos**. As 3 disciplinas cujo PDF de planejamento de ensino foi lançado à mão
@@ -350,6 +412,40 @@ Objetivo: amigos técnicos rodando em **hardware variado** pra (a) feedback de p
   classe** (a regra que o frontend já declarava, em vez de um tratamento visual novo), e
   **importar um planejamento de ensino vira um comando** — o que importa porque os PDFs
   das outras 4 disciplinas ainda vêm, e lançar à mão é o que produziu o erro.
+
+- **1.3 Evento × Tarefa: tornar a separação visível** — plano
+  [`fase1-3-eventos-e-tarefas-na-ui.md`](docs/tasks/fase1-3-eventos-e-tarefas-na-ui.md),
+  **gate respondido em 19/08/2026 (§5)**. Cortada em duas:
+
+  | | Entrega | Repos | Estado |
+  | --- | --- | --- | --- |
+  | **1.3a** | criar evento pela UI (recorrência, data limite, feriados); `data_fim` obrigatório no banco; Topbar enxuta | **backend + frontend** | 🔜 pronta para começar |
+  | **1.3b** | "Inbox" vira "Tarefas"; distinção visual do bloco planejado | frontend | ⏳ |
+
+  **A 1.3a é a primeira task de dois repos** sob a metodologia de dois agentes em
+  paralelo — o §6 do plano é o contrato entre eles.
+
+  Terceira regra fechada por dogfooding, e a mais desconfortável: em 19/08/2026 o
+  usuário **propôs a separação evento × tarefa como se fosse nova** — sendo que ela é a
+  arquitetura desde o MVP (`Evento` é ocupado e nunca é planejado; `Tarefa` tem prazo,
+  passa pelo solver e vira bloco ao ser promovida). **O modelo está certo e a interface
+  não o conta.**
+
+  O que a análise achou, medido em 19/08/2026:
+
+  - **Não existe caminho para criar evento na UI.** `store/apiStore.jsx:211` tem
+    `addEvento` ligado à API, e **nenhum componente o chama** — só existe
+    `NovaTarefaForm`. Evento só nasce por promoção de tarefa, agente, API ou admin.
+    É a explicação de por que as 3 disciplinas com PDF viraram 58 avulsos.
+  - **`ignorar_feriados` e `data_fim` trafegam inteiros** (serializer, mappers, tipos,
+    expansão local, testes) e **não têm um único controle na tela**.
+  - **Há séries infinitas em produção:** as duas da academia estão com `data_fim` nulo.
+  - **Nada distingue bloco planejado de bloco fixo**, embora `origem_tarefa` venha no
+    payload.
+
+  Sai daqui uma consequência que vale além da task: **quando o usuário descreve como
+  novidade algo que o sistema já faz, o problema é de interface, não de modelo** — e o
+  lugar de consertar é a UI, não o schema.
 
 ---
 
@@ -451,6 +547,24 @@ O grosso da fundação já foi no beta (Fase 0B). Aqui fica o que é específico
 
 ---
 
+## Backlog anotado (não é fase; é o que não pode se perder)
+
+- **O comparador às vezes mostra só 2 cenários.** `MAX_CENARIOS = 4` em
+  `services/cenarios.py` **conta a base**, então o usuário vê no máximo 3 alternativas —
+  e menos, quando arquétipos coincidem e são deduplicados. Foi reportado pelo frontend em
+  24/07/2026 (nota em
+  `../../frontend/Planejamento_Frontend/docs/rotina-inteligente/BACKEND-base-fora-do-lote.md`)
+  e a conclusão de lá é que **a base deveria ficar fora do lote**, não ocupar uma das 4
+  vagas. Vira task de backend quando alguém pegar; ainda **não foi decidido** se o certo é
+  tirar a base da contagem ou subir o teto.
+
+  *Recuperado em 19/08/2026:* este item vivia só no commit `e3f8a45`, na branch
+  `claude/0b-perfil-dono-e-escopo`, que **nunca foi mergeada** — o PR1 entrou no `main`
+  por outro caminho e levou o código, mas não este parágrafo. É o modo de falha que o
+  passo 8 do ciclo existe para evitar.
+
+---
+
 ## Decisões em aberto  💡
 
 - ✅ **Dados de domínio no beta:** decidido — **Postgres local por testador**;
@@ -485,6 +599,29 @@ O grosso da fundação já foi no beta (Fase 0B). Aqui fica o que é específico
   `buffer_dias`: "terminar na véspera" virou `nao_depois_de`, condição própria.
   Consequência a resolver no PR A: sem default, algo precisa ligar o campo nas tarefas
   que já existem — ver §4 e Pendência 1 do plano.
+- ✅ **Ordem: fechar a 1.2 ou voltar para a Fase 0** (levantado e decidido em
+  19/08/2026) — **fechar a 1.2 primeiro**; o PR B entrou no mesmo dia. O que pesou foi o
+  relógio: o semestre roda até 17/12 e o dado de dogfooding só existe com ele vivo,
+  enquanto o PR2 não tem prazo. **Depois do PR C, a Fase 0 volta a ser a frente.**
+  Trabalhar a Fase 1 agora **não furou a fila**: ela é declarada paralela, e o
+  argumento que impunha ordem estrita (o *custo de atraso* do `dono`, princípio 2) foi
+  **extinto pelo PR1** — regra de negócio agora sobe por cima do schema multi-tenant, com
+  retrabalho leve aceito. A Fase 1 ainda **alimenta** a Fase 0: o bug do estudo de prova
+  queimaria a rodada de feedback se fosse distribuído, e a medição do 7b é dado para a
+  decisão de IA local vs API.
+
+  O que **não** foi decisão: o PR2 parou por onze dias porque o `docs/tasks/README.md`
+  continuou rotulado "🚧 Bloqueado" depois que o Supabase foi provisionado (08/08). O
+  rótulo foi corrigido; a escolha de ordem, não.
+
+  | A favor de fechar a 1.2 primeiro | A favor do PR2 primeiro |
+  | --- | --- |
+  | **Tem relógio**: o semestre roda até 17/12 e o dado de dogfooding só existe com ele vivo | O PR2 **não tem relógio** — o Supabase está provisionado e continua lá |
+  | O PR A já foi feito e **ainda não rendeu valor**: sem o importador, só o admin escreve conteúdo | O PR2 é a **espinha**, e é estreito de propósito: essencialmente uma função |
+  | Os 67 eventos avulsos seguem errados no calendário que o usuário usa todo dia | O PR2 **destrava a 0A.6** (não se serve API sem auth na LAN) e é pré-requisito do PR3 e do beta |
+
+  Contra o PR2 agora, um custo real: ele põe o uso pessoal diário atrás de um login que
+  depende de internet, no meio do semestre.
 - **IA local vs API** — aguarda dado da Fase 0.
 - **Regras de negócio a mudar** — aguarda dogfooding (Fase 1).
 - **Hospedar (Fork A) vs desktop nativo (Fork B)** pros leigos — decidir após o beta.

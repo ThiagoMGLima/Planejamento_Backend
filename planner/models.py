@@ -206,6 +206,11 @@ class Evento(TimestampedModel):
         on_delete=models.SET_NULL,
         related_name="eventos",
     )
+    # Identidade estável do que `importar_planejamento_ensino` criou (Fase 1.2 / PR B).
+    # Sem ela o comando só teria o título para se reconhecer, e aí renomear a
+    # disciplina pelo app faria a próxima importação criar uma SEGUNDA série — duas
+    # aulas no mesmo horário, em silêncio. Vazio em tudo que não veio de importação.
+    chave_importacao = models.CharField(max_length=100, blank=True)
 
     objects = EscopoManager()
 
@@ -219,7 +224,14 @@ class Evento(TimestampedModel):
         constraints = [
             models.CheckConstraint(
                 check=Q(fim__gt=F("inicio")), name="ck_evento_fim_apos_inicio"
-            )
+            ),
+            # Parcial: o vazio é o caso comum (todo evento não-importado) e não pode
+            # colidir consigo mesmo. Por-dono, como toda unicidade daqui (0B.5).
+            models.UniqueConstraint(
+                fields=["dono", "chave_importacao"],
+                condition=~Q(chave_importacao=""),
+                name="uq_evento_dono_chave_importacao",
+            ),
         ]
 
     def __str__(self):

@@ -95,6 +95,46 @@ def montar_ocorrencia(evento, dt, duracao, persistidas):
     )
 
 
+def _rrule_do_evento(evento, janela_fim):
+    """A regra crua do evento, sem override nenhum aplicado.
+
+    Isolada de `expandir` para ter UM lugar que constrói a rrule: quem precisa
+    saber "a regra produz esta data?" (o importador) não pode perguntar a
+    `expandir`, que já aplica os overrides — a data que ele mesmo marcou como
+    PULADO sumiria da resposta, e a segunda importação rejeitaria o próprio JSON.
+    """
+    regra = evento.regra_recorrencia
+
+    until = janela_fim
+    if regra.data_fim:
+        # Fim do dia de data_fim, no fuso do evento.
+        data_fim_dt = datetime.combine(
+            regra.data_fim, time.max, tzinfo=evento.inicio.tzinfo
+        )
+        until = min(until, data_fim_dt)
+
+    if regra.tipo == RegraRecorrencia.Tipo.SEMANAL:
+        return rrule(WEEKLY, dtstart=evento.inicio, until=until, byweekday=regra.dias)
+    return rrule(MONTHLY, dtstart=evento.inicio, until=until, bymonthday=regra.dias)
+
+
+def datas_da_regra(evento, janela_inicio, janela_fim, feriados):
+    """As datas que a REGRA produz na janela — antes de qualquer override.
+
+    Difere de `expandir` de propósito: aqui uma data PULADA continua na lista,
+    porque a pergunta é "este dia é dia de aula?", não "o que aparece no
+    calendário?".
+    """
+    if evento.regra_recorrencia is None:
+        return []
+    rule = _rrule_do_evento(evento, janela_fim)
+    return [
+        dt.date()
+        for dt in rule.between(janela_inicio, janela_fim, inc=True)
+        if not (evento.regra_recorrencia.ignorar_feriados and dt.date() in feriados)
+    ]
+
+
 def expandir(evento, janela_inicio, janela_fim, feriados):
     """Gera as ocorrências de `evento` dentro de [janela_inicio, janela_fim].
 
@@ -106,19 +146,7 @@ def expandir(evento, janela_inicio, janela_fim, feriados):
         return
 
     duracao = evento.fim - evento.inicio
-
-    until = janela_fim
-    if regra.data_fim:
-        # Fim do dia de data_fim, no fuso do evento.
-        data_fim_dt = datetime.combine(
-            regra.data_fim, time.max, tzinfo=evento.inicio.tzinfo
-        )
-        until = min(until, data_fim_dt)
-
-    if regra.tipo == RegraRecorrencia.Tipo.SEMANAL:
-        rule = rrule(WEEKLY, dtstart=evento.inicio, until=until, byweekday=regra.dias)
-    else:  # MENSAL
-        rule = rrule(MONTHLY, dtstart=evento.inicio, until=until, bymonthday=regra.dias)
+    rule = _rrule_do_evento(evento, janela_fim)
 
     # `.all()` e não `.select_related(...)`: qualquer modificação do queryset
     # ignoraria o prefetch de quem chamou e faria 1 query por evento. Quem
